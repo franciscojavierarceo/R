@@ -143,7 +143,19 @@ ggplot(tmp2[tmp2$lambdas<70,],aes(x=-lambdas,y=value,colour=Variable))+
     gini<-with(v,1-2* sum(cumm_y*w)/(sum(a*w)*total_w))
     return(gini)
   }
-  mylift<-function(pred, actual, w=NULL, n=10) {     
+  mape <- function(pred,actual){ # Mean Absolute Percent Error
+    mape <- sum(abs(pred-actual)/length(actual))/length(actual)
+    print(paste("The Mean Absolute Percent Error is: ",round(mape*100,2),"%",sep=''))
+  }
+  rmse <- function(pred,actual){ # Root Mean-Squared Error
+    rmse <- round(sqrt(sum( (pred - actual)^2 )/length(actual)),4)
+    print(paste("The Root Mean-Squared Error is:",rmse))
+  }
+  prsq <- function(pred,actual){ # Psuedo R-squared
+    prsq <- round(summary(lm(actual~pred))$r.squared,4)
+    paste('The Psuedo R-Squared is:',prsq)
+  }
+  mylift<-function(pred, actual, w=NULL, n=10,metric=NULL) {     
     require(sqldf);require(reshape);require(glmnet)
     if (length(w)==0) {
       w<-rep(1.0, length(pred))
@@ -175,7 +187,18 @@ ggplot(tmp2[tmp2$lambdas<70,],aes(x=-lambdas,y=value,colour=Variable))+
     x2$Variable <- as.character(x2$Variable)
     x2$Variable[x2$Variable=='a'] <- 'Actual'
     x2$Variable[x2$Variable=='p'] <- 'Predicted'
-    main_title <- paste('Deciles Sorted by Prediction \n',NormGini)
+    if(is.null(metric)==TRUE){
+      main_title <- paste('Deciles Sorted by Prediction \n','Normalized Gini=',NormGini)  
+    } else if(metric=='RMSE'){
+      RMSEVal <- rmse(pred,actual)
+      main_title <- paste('Deciles Sorted by Prediction \n','RMSE=',RMSEVal)  
+    } else if(metric=="MAPE"){
+      MAPEVal <- rmse(pred,actual)
+      main_title <- paste('Deciles Sorted by Prediction \n','MAPE=',MAPEVal)  
+    } else if(metric=="AUC"){
+      AUCVal <- auc(y=actual,prob=pred)
+      main_title <- paste('Deciles Sorted by Prediction \n','AUC=',AUCVal)  
+    }     
     plt <- ggplot(x2)+geom_line(aes(x=Decile,y=Value,colour=Variable,linetype=Variable),size=0.75)+
       geom_point(aes(x=Decile,y=Value,colour=Variable),size=4)+
       theme_bw()+scale_linetype_manual(values=c("longdash", "solid"))+
@@ -184,18 +207,6 @@ ggplot(tmp2[tmp2$lambdas<70,],aes(x=-lambdas,y=value,colour=Variable))+
       scale_x_continuous(labels=comma,breaks=1:n)+scale_y_continuous(labels=dollar)+
       ggtitle(main_title)+ylab('Actual and Realized')
     return(plt)
-  }
-  mape <- function(pred,actual){ # Mean Absolute Percent Error
-    mape <- sum(abs(pred-actual)/length(actual))/length(actual)
-    print(paste("The Mean Absolute Percent Error is: ",round(mape*100,2),"%",sep=''))
-  }
-  rmse <- function(pred,actual){ # Root Mean-Squared Error
-    rmse <- round(sqrt(sum( (pred - actual)^2 )/length(actual)),4)
-    print(paste("The Root Mean-Squared Error is:",rmse))
-  }
-  prsq <- function(pred,actual){ # Psuedo R-squared
-    prsq <- round(summary(lm(actual~pred-1))$r.squared,4)
-    paste('The Psuedo R-Squared is:',prsq)
   }
 }
 #===========================================================================================
