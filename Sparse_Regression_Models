@@ -187,18 +187,24 @@ ggplot(tmp2[tmp2$lambdas<70,],aes(x=-lambdas,y=value,colour=Variable))+
     x2$Variable <- as.character(x2$Variable)
     x2$Variable[x2$Variable=='a'] <- 'Actual'
     x2$Variable[x2$Variable=='p'] <- 'Predicted'
-    if(is.null(metric)==TRUE){
-      main_title <- paste('Deciles Sorted by Prediction \n','Normalized Gini=',NormGini)  
-    } else if(metric=='RMSE'){
+    if(length(metric)==0){
+      metric <- 'Gini'
+    }
+    if(metric=='RMSE'){
       RMSEVal <- rmse(pred,actual)
-      main_title <- paste('Deciles Sorted by Prediction \n','RMSE=',RMSEVal)  
-    } else if(metric=="MAPE"){
-      MAPEVal <- rmse(pred,actual)
-      main_title <- paste('Deciles Sorted by Prediction \n','MAPE=',MAPEVal)  
-    } else if(metric=="AUC"){
+      main_title <- paste('Deciles Sorted by Prediction \n',RMSEVal)  
+    } 
+    if(metric=="MAPE"){
+      MAPEVal <- mape(pred,actual)
+      main_title <- paste('Deciles Sorted by Prediction \n',MAPEVal)  
+    } 
+    if(metric=="AUC"){
       AUCVal <- auc(y=actual,prob=pred)
       main_title <- paste('Deciles Sorted by Prediction \n','AUC=',AUCVal)  
-    }     
+    } 
+    if(metric=='Gini'){
+      main_title <- paste('Deciles Sorted by Prediction \n','Normalized Gini=',NormGini)  
+    } 
     plt <- ggplot(x2)+geom_line(aes(x=Decile,y=Value,colour=Variable,linetype=Variable),size=0.75)+
       geom_point(aes(x=Decile,y=Value,colour=Variable),size=4)+
       theme_bw()+scale_linetype_manual(values=c("longdash", "solid"))+
@@ -232,7 +238,7 @@ prsq(enet_pred[trainfilt==0],ydep[trainfilt==0])
 # Lift Charts that also include gini -- note the GINI gives a counterintuitive result here
 # but the other model fit statistics suggest LASSO is strictly superior
 #===============
-mylift(ols_pred[trainfilt==0],ydep[trainfilt==0])+xlab('Deciles - OLS Model (Hold Out)')
+mylift(ols_pred[trainfilt==0],ydep[trainfilt==0],metric='MAPE')+xlab('Deciles - OLS Model (Hold Out)')
 mylift(enet_pred[trainfilt==0],ydep[trainfilt==0])+xlab('Deciles - LASSO Model (Hold Out)')
 #===========================================================================================
 # Now you can look at the individual predictions
