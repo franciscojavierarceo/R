@@ -44,8 +44,10 @@ ReplaceMissingFunc<- function(mydf,start_col=2){
       mydf[,i] <- replacefactor(mydf[,i])
     }
     else if(is.numeric(mydf[,i])==TRUE){
-      mydf[,paste('missing_',names(mydf)[i],sep='')] <- ifelse(is.na(mydf[,i])==T,1,0)
-      mydf[,i] <- replacecont(mydf[,i])
+      if(sum(is.na(mydf[,i]))>0){
+        mydf[,paste('missing_',names(mydf)[i],sep='')] <- ifelse(is.na(mydf[,i])==T,1,0)
+        mydf[,i] <- replacecont(mydf[,i])        
+      }
     }
   }
   print(paste('The output data has',ncol(mydf),'columns.'))
@@ -96,6 +98,10 @@ replacecont <- function(x){
   x[is.na(x)] <- mean(x,na.rm=T)
   return(x)
 }
+num <- function(x){
+  x <- as.numeric(x)
+  return(x)
+}
 # Decile function, and can be extended to percentiles using the n parameter
 deciles <- function(x,n=10,print=F){
   out <- data.frame(quantile(x,probs=1:n/n))
@@ -132,6 +138,10 @@ fsummarize <- function(x){
   print(paste('Standard Deviation:', sd(x)))
   print(paste('Mean:', mean(x)))
   print(paste('Median:', median(x)))
+}
+# For consistincy between Python
+len <- function(x){
+  return(length(x))
 }
 # Capping function
 my_cap<-function(x, cap_l=NULL, cap_h=NULL) {
@@ -217,9 +227,9 @@ export <- function(mydf,filename){
   tmpout <- paste(outfilename,'has been exported.')
   print(tmpout)
 }
-ptable <- function(var){
+ptable <- function(var,sort=T){
   x <- data.frame(table(var))
-  x <- x[order(x$Freq,decreasing=T),]
+  x <- x[order(x$Freq,decreasing=sort),]
   return(x)
 }
 # A function to summarize discrete variables
@@ -536,9 +546,17 @@ fnr <- function(pred,actual){
   }
   return(out)
 }
+BOW2SparseMatrix <- function(var){
+  # Bag of Words to Sparse Matrix Creator
+  var <- as.character(var)
+  MyCorpus <- VCorpus(VectorSource(var))
+  CorpusMatrix <-DocumentTermMatrix(MyCorpus)
+  print(CorpusMatrix)
+  return(CorpusMatrix)
+}
 # ROC function for one plot
-my_roc <- function(c,a,thresh,add_p,colr){
-  mydf <- data.frame(cont_pred=c,actual_pred=a)
+my_roc <- function(pred,actual,thresh=0,add_p=0,colr='red'){
+  mydf <- data.frame(cont_pred=pred,actual_pred=actual)
   mydf$true_bin <- with(mydf,ifelse(actual_pred>thresh,1,0))
   mydf$sort <-with(mydf,cont_pred + min(cont_pred)+1)
   mydf <- sqldf('select * from mydf order by sort')
@@ -547,7 +565,8 @@ my_roc <- function(c,a,thresh,add_p,colr){
   index <- seq(from=-.1,to=1.2,length=n) 
   roc_pred <- with(mydf,prediction(pred_rank,true_bin))
   perf <-  performance(roc_pred,'tpr','fpr')
-  plot(perf,col=colr,main="ROC Curve",add=add_p);grid(5,5,'gray44')
+  main_title <- paste('ROC Curve \n','AUC =',round(auc(actual,pred),4))
+  plot(perf,col=colr,main=main_title,add=add_p);grid(5,5,'gray44')
   lines(index,index,col="black",lty=1)
 }
 # The function below looks at the fit statistics of various predictions
@@ -654,7 +673,7 @@ ownslift<-function(pred, orderby,actual, w=NULL, n=10) {
 }
 
 # A prettier version of Owen's original Lift Function
-mylift<-function(pred, actual, w=NULL, n=10,yscl='dollar'){   	
+mylift<-function(pred, actual, w=NULL, n=10,yscl='dollar',metric=NULL){   	
   if (length(w)==0) {
     w<-rep(1.0, length(pred))
   }
@@ -881,7 +900,7 @@ BootStrapAUC <- function(preds,actual,BS_Reps=100,CI_Lower=0.025,CI_Upper=0.975)
        xlab='Area Under the Curve (AUC)',
        ylab='Cumulative Percent');grid(5,5,'gray44')
 }
-PartialDependence <- function(xs,varname,model_name){
+PartialDependence <- function(xs,varname,model_name,upper=90){
   n <- 100
   k <- dim(xs)[2]
   mfx <- xs[1:n,]
@@ -889,10 +908,34 @@ PartialDependence <- function(xs,varname,model_name){
   x_j <- which(varlist==varname)
   if(is.numeric(xs[,x_j])==T){
     # Using the quantile makes it cleaner than using the min to max
-    xvar <- quantile(xs[,x_j],1:90/100)
-    xvar <- c(rep(min(xs[,x_j]),10),xvar)
+    xvar <- array(quantile(xs[,x_j],1:upper/100))
+    xvar <- c(rep(min(xs[,x_j]),100-length(xvar)),xvar)
     mfx[,1:k] <- 0
     mfx[,x_j] <-xvar
+    y_dx <- predict(model_name,mfx)
+    mfx_df <- data.frame(y_dx,xvar)
+    plt <- ggplot(mfx_df,aes(x=xvar,y=y_dx))+
+      geom_line(colour='blue')+
+      scale_y_continuous(labels=comma)+
+      theme_bw()+xlab(varname)+ylab('Partial Prediction')+
+      ggtitle(paste('Partial Prediciton of',varname))
+    print(plt)    
+  } else {
+    print('Feature is not continuous.')
+    print('Cannot estimate partial prediction.')
+  }
+}
+EmpiricalDependence <- function(xs,varname,model_name){
+  n <- dim(xs)[1]
+  k <- dim(xs)[2]
+  mfx <- xs[1:n,]
+  varlist <- substr(colnames(mfx),1,nchar(varname))
+  x_j <- which(varlist==varname)
+  if(is.numeric(xs[,x_j])==T){
+    # Using the quantile makes it cleaner than using the min to max
+    newvars <- indx[(!indx %in% x_j)==T]
+    mfx[,newvars] <- 0 
+    xvar <- predict(model_name,xs)
     y_dx <- predict(model_name,mfx)
     mfx_df <- data.frame(y_dx,xvar)
     plt <- ggplot(mfx_df,aes(x=xvar,y=y_dx))+
@@ -1069,11 +1112,10 @@ xgboost_cv <- function(xs,yvar,loss='binary:logistic',nfolds=10,nrounds=200,Verb
 #   smry$TestTrainRatio <- with(smry,AVG_Test_AUC/AVG_Train_AUC)
   return(smry)
 }
-
-# This finds the predictor importance
-XGBoostImportance<- function(xs,var_list,ydep,model,filename,newvarnames=NA,ToCSV=F){
-  # Takes care of foreign characters
-  Sys.setlocale('LC_ALL','C')  
+# Useful for modeling
+PredictorImportance<- function(xs,var_list,ydep,model,filename='',newvarnames=NA,ToCSV=F){
+  # This finds the predictor importance for GLMNET and Other types of models
+  Sys.setlocale('LC_ALL','C')  # Takes care of foreign characters
   mfx <- xs
   varnames <- colnames(xs)
   varbuckets <- var_list
@@ -1087,7 +1129,11 @@ XGBoostImportance<- function(xs,var_list,ydep,model,filename,newvarnames=NA,ToCS
     labels[i] <- as.character(labeldf$varbuckets[labeldf$TEST==T][1])
   }
   mfx_details <-data.frame(labels,varnames)
-  pred_total <- predict(model,mfx)
+  if((class(model)=='cv.glmnet')==TRUE){
+    pred_total <- predict(model,mfx,s='lambda.min',type='response')    
+  } else {
+    pred_total <- predict(model,mfx)    
+  }
   actual <- ydep
   outdf <-data.frame(varbuckets,RMSE_Without=0)
   StartTime <- Sys.time()
@@ -1098,7 +1144,11 @@ XGBoostImportance<- function(xs,var_list,ydep,model,filename,newvarnames=NA,ToCS
     Xs_without <- mfx
     if(length(colfilter)>0){
       Xs_without[,colfilter] <- 0    
-      pred_without <- predict(model,Xs_without)
+      if((class(model)=='cv.glmnet')==TRUE){
+        pred_without <- predict(model,Xs_without,s='lambda.min',type='response')
+      } else {
+        pred_without <- predict(model,Xs_without)
+      }
       fitstats <- predcompare(pred_without,actual)  
       outdf$RMSE_Without[i] <- fitstats$RMSE
     }
@@ -1120,7 +1170,7 @@ XGBoostImportance<- function(xs,var_list,ydep,model,filename,newvarnames=NA,ToCS
   }
   outdf <- outdf[order(outdf$RelativeImportance,decreasing=T),]
   outdf$varbuckets <- factor(outdf$varbuckets,
-                            levels=outdf$varbuckets[order(outdf$RelativeImportance)])
+                             levels=outdf$varbuckets[order(outdf$RelativeImportance)])
   myplt <- ggplot(outdf,aes(x=varbuckets,y=RelativeImportance))+
     geom_bar(stat='identity',fill='blue')+coord_flip()+
     theme_bw()+xlab('')+
