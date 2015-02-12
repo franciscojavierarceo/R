@@ -546,13 +546,19 @@ fnr <- function(pred,actual){
   }
   return(out)
 }
-BOW2SparseMatrix <- function(var){
+BOW2SparseMatrix <- function(var,sparseval=NULL){
   # Bag of Words to Sparse Matrix Creator
   var <- as.character(var)
   MyCorpus <- VCorpus(VectorSource(var))
   CorpusMatrix <-DocumentTermMatrix(MyCorpus)
   print(CorpusMatrix)
-  return(CorpusMatrix)
+  if(length(sparseval)>0){
+    CorpusMatrix <- removeSparseTerms(BizTypeXs,sparseval)
+    print(paste(1-sparseval,'Sparse Terms Removed from the Document Matrix'))
+    print("Processed Document Matrix is:")
+    print(CorpusMatrix)    
+  }
+  return(Matrix(CorpusMatrix,sparse=T,nrow=nrow(CorpusMatrix)))
 }
 # ROC function for one plot
 my_roc <- function(pred,actual,thresh=0,add_p=0,colr='red'){
