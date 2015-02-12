@@ -553,7 +553,7 @@ BOW2SparseMatrix <- function(var,sparseval=NULL){
   CorpusMatrix <-DocumentTermMatrix(MyCorpus)
   print(CorpusMatrix)
   if(length(sparseval)>0){
-    CorpusMatrix <- removeSparseTerms(BizTypeXs,sparseval)
+    CorpusMatrix <- removeSparseTerms(CorpusMatrix,sparseval)
     print(paste(1-sparseval,'Sparse Terms Removed from the Document Matrix'))
     print("Processed Document Matrix is:")
     print(CorpusMatrix)    
@@ -937,6 +937,7 @@ EmpiricalDependence <- function(xs,varname,model_name,RankNum=10){
   mfx <- xs[1:n,]
   varlist <- substr(colnames(mfx),1,nchar(varname))
   x_j <- which(varlist==varname)
+  indx <- 1:k
   newvars <- indx[(!indx %in% x_j)==T]
   mfx[,newvars] <- 0 
   xvar <- predict(model_name,xs)
