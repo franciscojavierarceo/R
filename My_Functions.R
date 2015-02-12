@@ -925,29 +925,25 @@ PartialDependence <- function(xs,varname,model_name,upper=90){
     print('Cannot estimate partial prediction.')
   }
 }
-EmpiricalDependence <- function(xs,varname,model_name){
+EmpiricalDependence <- function(xs,varname,model_name,RankNum=10){
   n <- dim(xs)[1]
   k <- dim(xs)[2]
   mfx <- xs[1:n,]
   varlist <- substr(colnames(mfx),1,nchar(varname))
   x_j <- which(varlist==varname)
-  if(is.numeric(xs[,x_j])==T){
-    # Using the quantile makes it cleaner than using the min to max
-    newvars <- indx[(!indx %in% x_j)==T]
-    mfx[,newvars] <- 0 
-    xvar <- predict(model_name,xs)
-    y_dx <- predict(model_name,mfx)
-    mfx_df <- data.frame(y_dx,xvar)
-    plt <- ggplot(mfx_df,aes(x=xvar,y=y_dx))+
-      geom_line(colour='blue')+
-      scale_y_continuous(labels=comma)+
-      theme_bw()+xlab(varname)+ylab('Partial Prediction')+
-      ggtitle(paste('Partial Prediciton of',varname))
-    print(plt)    
-  } else {
-    print('Feature is not continuous.')
-    print('Cannot estimate partial prediction.')
-  }
+  newvars <- indx[(!indx %in% x_j)==T]
+  mfx[,newvars] <- 0 
+  xvar <- predict(model_name,xs)
+  y_dx <- predict(model_name,mfx)
+  mfx_df <- data.frame(y_dx,xvar)
+  mfx_df$xrank <- myrank(mfx_df$xvar,k=RankNum)
+  tmp <- sqldf('select xrank, max(xvar) as MaxValue, avg(y_dx) as Prediction from mfx_df group by 1')
+  plt <- ggplot(tmp,aes(x=xrank,y=Prediction))+
+    geom_line(colour='blue')+
+    scale_y_continuous(labels=comma)+
+    theme_bw()+xlab(varname)+ylab('Partial Prediction')+
+    ggtitle(paste('Empirical Partial Prediciton of',varname))
+  print(plt)    
 }
 #========================================================================================================================
 # ROC databuild and use.
