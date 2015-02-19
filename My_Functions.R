@@ -20,6 +20,7 @@ require(ROCR)
 require(gdata)
 require(reshape2)
 require(ggplot2)
+require(gridExtra)
 require(scales)
 require(doParallel)
 require(randomForest)
@@ -232,6 +233,9 @@ ptable <- function(var,sort=T){
   x <- x[order(x$Freq,decreasing=sort),]
   return(x)
 }
+natble<- function(var){
+  return(table(is.na(var)))
+}
 # A function to summarize discrete variables
 cat_summary <- function(df,x,percent=T){
   df <- data.frame('var'=df[,x])
@@ -329,16 +333,17 @@ cat_signf_cr8tr <- function(df,x,y,signif=0.10){
   tmp_df$new[!tmp_df$x %in% lvls] <- 'OTHER'
   return(tmp_df$new)
 }
-my_exp1<-function(d1, vn1, vn2, y, vnp, filter, cred_k, r_k=0){
+my_exp1<-function(d1, Xvar1, Xvar2, y, AverageY, filter, cred_k=10, r_k=0){
   # d1 is the data frame
-  # vn1 is the  first factor variable
-  # vn2 is the second factor variable
+  # Xvar1 is the  first factor variable
+  # Xvar2 is the second factor variable
   # y is the actual
-  # vnp is the dependent variable
-  # r_k is the random jitter
-  # cred_k is the credibility adjustment
+  # AverageY is the mean of the dependent variable (training sample)
+  # filter is the trianing filter (can be true/false)
+  # r_k is the random jitter size
+  # cred_k is the credibility adjustment size 
   # To do the one way just create a dummy variable with all ones
-  d2<-d1[, c(vn1, vn2, y, vnp)]
+  d2<-d1[, c(Xvar1, Xvar2, y, AverageY)]
   names(d2)<-c("f1", "f2", "a", "p")
   d2$filter<-filter
   sum1<-sqldf("select f1, f2, sum(1) as cnt, sum(p) as sump, sum(a) as suma from d2 where filter=1 group by 1,2")
@@ -362,9 +367,26 @@ gg_color_hue <- function(n) {
   hues = seq(15, 375, length=n+1)
   hcl(h=hues, l=65, c=100)[1:n]
 }
-myformula <- function(features){
-  out <- as.formula(paste('',paste(paste(features,collapse='+'),'-1',sep=''),sep='~'))
+myformula <- function(features,y=NULL){
+  if(len(y)==0){
+    out <- as.formula(paste('',paste(paste(features,collapse='+'),'-1',sep=''),sep='~'))
+  }
+  if(len(y)>0){
+    out <- as.formula(paste(y,paste(paste(features,collapse='+'),'-1',sep=''),sep='~'))
+  }
   return(out)
+}
+# This is to get coefficients
+glmnet_betas <- function(glmnet_model){
+  bs <- as.matrix(coef(glmnet_model,s='lambda.min'))
+  bs <- data.frame(bs) ; names(bs) <- 'Coefficients'
+  prcnt0 <- round(len(bs$Coefficients[bs$Coefficients==0])/len(bs$Coefficients),4)
+  out <- paste(prcnt0*100,'% of the variables were zero.',sep='')
+  Nonzero <- len(bs$Coefficients[bs$Coefficients!=0])
+  out2<- paste(Nonzero,'of the variables were non-zero.')
+  print(out)
+  print(out2)
+  return(bs)
 }
 # This will just nicely automate stuff that's annoying
 glmnetout <- function(model,
@@ -558,7 +580,10 @@ BOW2SparseMatrix <- function(var,sparseval=NULL){
     print("Processed Document Matrix is:")
     print(CorpusMatrix)    
   }
-  return(Matrix(CorpusMatrix,sparse=T,nrow=nrow(CorpusMatrix)))
+  words <- colnames(CorpusMatrix)
+  out <- Matrix(CorpusMatrix,sparse=T,nrow=nrow(CorpusMatrix))
+  colnames(out) <-words
+  return(out)
 }
 # ROC function for one plot
 my_roc <- function(pred,actual,thresh=0,add_p=0,colr='red'){
@@ -921,14 +946,13 @@ PartialDependence <- function(xs,varname,model_name,upper=90){
     y_dx <- predict(model_name,mfx)
     mfx_df <- data.frame(y_dx,xvar)
     plt <- ggplot(mfx_df,aes(x=xvar,y=y_dx))+
-      geom_line(colour='blue')+
+      geom_line(colour='red ')+
       scale_y_continuous(labels=comma)+
       theme_bw()+xlab(varname)+ylab('Partial Prediction')+
-      ggtitle(paste('Partial Prediciton of',varname))
-    print(plt)    
+      ggtitle(paste('Estimated Partial Prediciton of',varname))
+    return(plt)    
   } else {
-    print('Feature is not continuous.')
-    print('Cannot estimate partial prediction.')
+    return(NULL)
   }
 }
 EmpiricalDependence <- function(xs,varname,model_name,RankNum=10){
@@ -942,15 +966,149 @@ EmpiricalDependence <- function(xs,varname,model_name,RankNum=10){
   mfx[,newvars] <- 0 
   xvar <- predict(model_name,xs)
   y_dx <- predict(model_name,mfx)
-  mfx_df <- data.frame(y_dx,xvar)
-  mfx_df$xrank <- myrank(mfx_df$xvar,k=RankNum)
-  tmp <- sqldf('select xrank, max(xvar) as MaxValue, avg(y_dx) as Prediction from mfx_df group by 1')
-  plt <- ggplot(tmp,aes(x=xrank,y=Prediction))+
-    geom_line(colour='blue')+
-    scale_y_continuous(labels=comma)+
-    theme_bw()+xlab(varname)+ylab('Partial Prediction')+
-    ggtitle(paste('Empirical Partial Prediciton of',varname))
-  print(plt)    
+  if(len(xvar)==len(y_dx)){
+    mfx_df <- data.frame(y_dx,xvar)
+    mfx_df$xrank <- myrank(mfx_df$xvar,k=RankNum)
+    tmp <- sqldf('select xrank, max(xvar) as MaxValue, avg(y_dx) as Prediction from mfx_df group by 1')
+    plt <- ggplot(tmp,aes(x=xrank,y=Prediction))+
+      geom_line(colour='blue')+
+      scale_y_continuous(labels=comma)+
+      theme_bw()+xlab(varname)+ylab('Partial Prediction')+
+      ggtitle(paste('Empirical Partial Prediciton of',varname))
+    return(plt)
+    } else {
+    return(NULL)
+  }
+}
+EmpVarDep <- function(xs,varlist,GBM_Model,NRanks=100){
+  # Empirical Dependence for All Variables
+  for(i in varlist){
+    EmpiricalDependence(xs,i,GBM_Model,NRanks)  
+  }  
+}
+ParVarDep <- function(xs,varlist,GBM_Model,NRanks=100){
+  # Empirical Dependence for All Variables
+  for(i in varlist){
+    PartialDependence(xs,i,GBM_Model,NRanks)  
+  }  
+}
+AllVariableDependence<-function(xs,varlist,GBM_Model,NRanks){
+  for(i in varlist){
+    print(i)
+    VariableDependence(xs,i,GBM_Model,NRanks)
+  }
+}
+VariableDependence<- function(xs,varname,GBM_Model,NRanks=100){
+  p1 <- EmpiricalDependence(xs,varname,GBM_Model,NRanks)
+  p2 <- PartialDependence(xs,varname,GBM_Model,NRanks)
+  if(is.null(p1)==T & is.null(p1)==T){
+    out <- NULL
+  } else
+  if(is.null(p1)==F & is.null(p2)==F){
+    out <- grid.arrange(p1,p2)        
+  } else
+  if(is.null(p1)==T & is.null(p2)==F){
+    out <- p2
+  } else
+  if(is.null(p1)==F & is.null(p2)==T){
+    out <- p1    
+  }
+  return(out)
+}
+MyExperVar <- function(tmpdf,tflt,y,xvar1,xvar2=NULL,alphaval=0.8,fldsval=10){
+  ydep <- tmpdf[,y]
+  features <- data.frame(tmpdf[,c(xvar1)]) ;names(features) <- xvar1
+  if(len(xvar2)>0){
+    features <- data.frame(tmpdf[,c(xvar1,xvar2)])
+    features$xvar12 <- paste(features[,1],features[,2],sep='_')
+    names(features) <- c(xvar1,xvar2,paste(substr(xvar1,1,3),substr(xvar2,1,3),sep=''))
+  }
+  for(i in 1:ncol(features)){
+    features[,i] <- factor(features[,i])
+  }
+  features <-ReplaceMissingFunc(features,start_col=1)
+  mymodelformula  <- myformula(colnames(features))  
+  xs <- sparse.model.matrix(mymodelformula,data=features)
+  print(dim(xs))
+  registerDoParallel(cores=detectCores(all.test=TRUE))
+  getDoParWorkers()
+  set.seed(60)
+  TmpModel <- cv.glmnet(
+    x=xs[tflt,],
+    y=ydep[tflt],
+    nfolds=fldsval,
+    type.measure='auc',
+    parallel=TRUE,
+    family='binomial',
+    alpha=alphaval)
+  TmpPred <- c(predict(TmpModel,newx=xs,s='lambda.min',type='response'))
+  return(TmpPred)  
+}
+# My Count Experience Variable
+MyCExperVar <- function(tmpdf,tflt,y,idvar,xvar1,xvar2=NULL){
+  if(len(xvar2)==0){
+    features <- data.frame(tmpdf[,c(idvar,xvar1)]); 
+    names(features)[1] <- 'idvar'
+    names(features)[2] <- 'xvar1'
+    features$ydep <- tmpdf[,y]
+    features$TmpFilter <- ifelse(tflt==1,1,0)
+    out <- sqldf('select xvar1, sum(ydep) as XSum, count(*) as XCount
+                 from features where TmpFilter=1 group by 1')
+    out2<- sqldf('select a.idvar ,b.xvar1,b.XSum,b.XCount from features a left join out b
+                 on a.xvar1 = b.xvar1 order by a.idvar')
+    out2$XSum[is.na(out2$XSum)==T]<-0
+    out2$XCount[is.na(out2$XCount)==T]<-0
+    names(out2) <- c(idvar,xvar1,paste(xvar1,'Cnt',sep=''),paste(xvar1,'Sum',sep=''))    
+  }
+  if(len(xvar2)>0){
+    features <- data.frame(tmpdf[,c(idvar,xvar1,xvar2)])
+    names(features) <- c('idvar','xvar1','xvar2')
+    names(features)[1] <- 'idvar'
+    names(features)[2] <- 'xvar1'
+    names(features)[3] <- 'xvar2'
+    features$ydep <- tmpdf[,y]
+    features$TmpFilter <- ifelse(tflt==1,1,0)
+    out <- sqldf('select xvar1, xvar2,
+                 sum(ydep) as XSum, 
+                 count(*) as XCount
+                 from features where TmpFilter=1 group by 1,2')
+    out2<- sqldf('select a.idvar ,a.xvar1,a.xvar2, b.XSum,b.XCount from features a left join out b
+                 on a.xvar1 = b.xvar1  and a.xvar2 = b.xvar2 order by a.idvar')
+    out2$XSum[is.na(out2$XSum)==T]<-0
+    out2$XCount[is.na(out2$XCount)==T]<-0
+    names(out2) <- c(idvar,xvar1,xvar2,paste(xvar1,xvar2,'Cnt',sep=''),paste(xvar1,xvar2,'Sum',sep=''))
+  }
+  return(out2)
+}
+GBMExpVar <- function(tmpdf,tflt,y,xvar1,xvar2=NULL,prnt=T){
+  ydep <- tmpdf[,y]
+  if(len(xvar2)==0){
+    features <- data.frame(tmpdf[,c(xvar1)])
+    names(features) <- xvar1
+  }
+  if(len(xvar2)>0){
+    features <- data.frame(tmpdf[,c(xvar1,xvar2)])
+    features$xvar12 <- paste(features[,1],features[,2],sep='_')
+    names(features) <- c(xvar1,xvar2,paste(substr(xvar1,1,3),substr(xvar2,1,3),sep=''))
+  }
+  for(i in 1:dim(features)[2]){
+    # Turning them into integers
+    features[,i] <- as.integer(factor(features[,i]))
+  }
+  xs <- model.matrix(~.,data=features)
+  set.seed(504)
+  TmpModel<- xgboost(data = xs[tflt,],
+                        label = ydep[tflt],
+                        max.depth = 30,
+                        eta = 1,
+                        nround = 200,
+                        objective = "binary:logistic",
+                        verbose=0)
+  out<- predict(TmpModel,xs)
+  if(prnt==T){
+    print(auc(ydep[tflt],out[tflt]))    
+  }
+  return(out)
 }
 #========================================================================================================================
 # ROC databuild and use.
@@ -1064,18 +1222,26 @@ rocplot.multiple <- function(test.data.list, groupName = "grp", predName = "res"
   return(p)
 }
 # Cross Fold Validation for XGBoost
-xgboost_cv <- function(xs,yvar,loss='binary:logistic',nfolds=10,nrounds=200,Verbose=0){
+xgboost_cv <- function(xs,yvar,tflt,loss='binary:logistic',nfolds=10,nrounds=200,Verbose=0,maxseq=NULL){
   # This is a way to do cross fold validation for the Maximum Depth
+  Xs <- xs[tflt,]
+  yvar <- yvar[tflt]
   set.seed(510)
-  folds <- cut(seq(1,nrow(mydf[train_filt,])),breaks=nfolds,labels=FALSE)
+  folds <- cut(seq(1,nrow(Xs)),breaks=nfolds,labels=FALSE)
   flds <- unique(folds)
-  max_depth_var <- seq(1,50,length=10); max_depth_var<- round(max_depth_var,0)
+  if(len(maxseq)==0){
+    max_depth_var <- seq(1,21,length=11); 
+    max_depth_var<- round(max_depth_var,0)    
+  }
+  if(len(maxseq)>0){
+    max_depth_var <- maxseq
+  }
   out <- expand.grid(FoldIteration=flds,MaxValueIterated=max_depth_var)
   out$TrainAUC <- NA
   out$TestAUC <- NA
   for(i in 1:length(flds)){
-    xtst_tmp <- xs[folds %in% flds[i],]
-    xtrn_tmp <- xs[!folds %in% flds[i],]
+    xtst_tmp <- Xs[folds %in% flds[i],]
+    xtrn_tmp <- Xs[!folds %in% flds[i],]
     ytst_tmp <- yvar[folds %in% flds[i]]
     ytrn_tmp <- yvar[!folds %in% flds[i]]
     for(j in 1:length(max_depth_var)){
@@ -1110,10 +1276,14 @@ xgboost_cv <- function(xs,yvar,loss='binary:logistic',nfolds=10,nrounds=200,Verb
               avg(TrainFNR) as AVG_Train_FNR,
               avg(TrainFPR) as AVG_Train_FPR,
               count(*) as nrows
-              from out group by 1,2
-              order by 3')
-#   smry$TestTrainRatio <- with(smry,AVG_Test_AUC/AVG_Train_AUC)
-  return(smry)
+              from out group by 1,2')
+  with(smry,plot(Iteration,AVG_Test_AUC,ylim=c(0,1),col='red',pch=16,type='b'))
+  with(smry,lines(Iteration,AVG_Test_AUC+2*SD_Test_AUC,ylim=c(0,1),col='blue',pch=16,type='b'))
+  with(smry,lines(Iteration,AVG_Test_AUC-2*SD_Test_AUC,ylim=c(0,1),col='blue',pch=16,type='b'))
+  grid(5,5,'gray44')
+  smry <- smry[order(smry$AVG_Test_AUC,decreasing=F),]
+  print(smry)
+  return(smry$MaxValueIterated[dim(smry)[1]])
 }
 # Useful for modeling
 PredictorImportance<- function(xs,var_list,ydep,model,filename='',newvarnames=NA,ToCSV=F){
@@ -1190,16 +1360,3 @@ PredictorImportance<- function(xs,var_list,ydep,model,filename='',newvarnames=NA
 #========================================================================================================================
 ######################################################## END ############################################################
 #========================================================================================================================
-
-#Parallel GLMNET 
-#registerDoParallel(cores=detectCores(all.tests=TRUE))
-#getDoParWorkers()
-#t0 <- Sys.time()
-#parallel_model1 <- cv.glmnet(x=xs[train_filt,],
-#                     y=ydep[train_filt],
-#                     nfolds=5,
-#                     alpha=0.8,
-#                     family='poisson',
-#                     parallel=TRUE)
-#t1 <- Sys.time()
-#print(t1-t0)
