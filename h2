@@ -1,0 +1,95 @@
+#=====================================================================
+# Author: Francisco Javier Arceo
+# Purpose: Homework 2 - Machine Learning for Data Science
+# Date: February 24 2015
+#=====================================================================
+# To load the .mat file
+require('scatterplot3d')
+require('R.matlab')
+#=====================================================================
+setwd('/Users/franciscojavierarceo/Data/Hmwk/mnist_csv') # Folder
+#=====================================================================
+MatLabData <- readMat('mnist_mat.mat')        # Reading the data
+xstrn <- MatLabData$Xtrain                    # Training data
+ystrn <- MatLabData$label.train               # Training data
+xstst <- MatLabData$Xtest                     # Test data
+ystst <- MatLabData$label.test                # Test data
+Q <- MatLabData$Q                       # Matrix of Principal Components
+rotate <- function(x){ t(apply(x, 2, rev)) }
+# This is a 7
+yhat0 <- rotate(matrix(Q%*%xstst[,001],ncol=28,byrow=T))
+yhat1 <- rotate(matrix(Q%*%xstst[,100],ncol=28,byrow=T))
+yhat2 <- rotate(matrix(Q%*%xstst[,150],ncol=28,byrow=T))
+yhat3 <- rotate(matrix(Q%*%xstst[,200],ncol=28,byrow=T))
+yhat4 <- rotate(matrix(Q%*%xstst[,250],ncol=28,byrow=T))
+yhat5 <- rotate(matrix(Q%*%xstst[,300],ncol=28,byrow=T))
+yhat6 <- rotate(matrix(Q%*%xstst[,350],ncol=28,byrow=T))
+yhat7 <- rotate(matrix(Q%*%xstst[,400],ncol=28,byrow=T))
+yhat8 <- rotate(matrix(Q%*%xstst[,450],ncol=28,byrow=T))
+yhat9 <- rotate(matrix(Q%*%xstst[,500],ncol=28,byrow=T))
+# Verifying the plots work - and a few different colors
+par(mfrow=c(1,1))
+image(yhat0,col=hsv(seq(0,0.25,length=256),1,1))
+par(mfrow=c(3,3))
+image(yhat1,col=grey(seq(0,1,length=2)))
+image(yhat2,col=grey(seq(0,1,length=256)))
+image(yhat3,col=rainbow(256))
+image(yhat4,col=hsv(seq(0,0.25,length=256),1,1))
+image(yhat5,col=hsv(seq(0.25,0,length=256),1,1))
+image(yhat6,col=hsv(seq(0.85,0,length=256),1,1))
+image(yhat7,col=hsv(seq(0.95,0.1,length=256),1,1))
+image(yhat8,col=hsv(seq(0.25,0,length=256),1,1))
+image(yhat9,col=hsv(seq(0.85,0.5,length=256),1,1))
+#=====================================================================
+# Problem 3a
+#=====================================================================
+# - Implement the K-NN for k=1,2,3,4,5
+# - For each k calculate the confusion matrix and show the trace
+#    divided by 500. 
+# - For k = 1,3,5 shows three misclasified examples and indicate the
+#    true class for each one
+#=====================================================================
+# Euclidean distance as defined by:
+# ||u -v||_2 = \sqrt( sum_i=1^{d}( (u_i - v_i)^2 ))
+EucDist <- function(u,v){
+  return(sqrt( sum( ( u - v )^2)))
+}
+# K-Nearest Neighbors
+MyKNN <- function(x,y){
+  
+}
+# Useful plot
+par(mfrow=c(1,2))
+plot(xstrn[1,],xstrn[2,],pch=16,col=ystrn)
+plot(xstrn[3,],xstrn[4,],pch=16,col=ystrn)
+par(mfrow=c(1,1))
+scatterplot3d(xstrn[1,],xstrn[3,],xstrn[4,],color=factor(ystrn),pch=16)
+#=====================================================================
+# Problem 3b
+# - Implement the Bayes classifier using the Multivariate Gaussian
+# - Derive MLE for the 10-d distribution on classes and Gaussian
+#    parameters for a particular class j
+# - Show the confusion matrix in a table. Show the trace(CM)/500
+# - Show th mean of each Gaussian as an image using the provided Q
+#    matrix
+# - Show three misclassified examples & show the probability
+#   distribution on the 10 digits learned by the Bayes classifier for
+#   each one.
+#=====================================================================
+
+#=====================================================================
+# Problem 3c
+# - Implement the multiclass logistic regression - set the step size
+#   on the order of \rho = 0.1/5000
+# - For each cycle through w_o,...,w_9 calculate the gradient and 
+#   plot as a function of each iteration. Do 1000 iterations
+# - Show the confusion matrix in a table with trace(CM)/500
+# - Show three misclassified examples & show the probability
+#   distribution on the 10 digits learned by the softmax function
+#   for each one.
+#=====================================================================
+# Only examples don't use
+
+#=====================================================================
+# End
+#=====================================================================
