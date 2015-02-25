@@ -4,16 +4,15 @@
 # Date: February 24 2015
 #=====================================================================
 # To load the .mat file
-require('scatterplot3d')
 require('R.matlab')
 #=====================================================================
-setwd('/Users/franciscojavierarceo/Data/Hmwk/mnist_csv') # Folder
+setwd('/Users/franciscojavierarceo/School/ML/2 - Homework/HMWK2/')
 #=====================================================================
 MatLabData <- readMat('mnist_mat.mat')        # Reading the data
 xstrn <- MatLabData$Xtrain                    # Training data
-ystrn <- MatLabData$label.train               # Training data
+ystrn <- as.numeric(MatLabData$label.train)   # Training data
 xstst <- MatLabData$Xtest                     # Test data
-ystst <- MatLabData$label.test                # Test data
+ystst <- as.numeric(MatLabData$label.test)    # Test data
 Q <- MatLabData$Q                       # Matrix of Principal Components
 rotate <- function(x){ t(apply(x, 2, rev)) }
 # This is a 7
@@ -58,12 +57,35 @@ EucDist <- function(u,v){
 MyKNN <- function(x,y){
   
 }
-# Useful plot
-par(mfrow=c(1,2))
-plot(xstrn[1,],xstrn[2,],pch=16,col=ystrn)
-plot(xstrn[3,],xstrn[4,],pch=16,col=ystrn)
-par(mfrow=c(1,1))
-scatterplot3d(xstrn[1,],xstrn[3,],xstrn[4,],color=factor(ystrn),pch=16)
+
+xs <- cbind(xstrn,xstst)
+# DstMtrx <- as.matrix(dist(t(xstrn),method='euclidean'))
+DstMtrx <- as.matrix(dist(t(xs),method='euclidean'))
+k <- 1
+x <- DstMtrx
+i <- 1
+DstMtrx
+
+MyKNN <- function(x,y,k){
+  KCategory <- c()
+  for(i in 1:dim(x)[1]){
+    tmpdf <- data.frame(Feature=x[,i],
+                        Index=1:length(x[,i]),
+                        Label=NA)
+    tmpdf$Label[1:length(y)] <- y
+    tmpdf <- tmpdf[order(tmpdf$Feature,decreasing=F),]
+    knnss <- tmpdf[1:k,]
+    # This drops the NAs (i.e., the test data labels)
+    # Which is what we want to happen
+    VL <- data.frame(table(knnss$Label))
+    VL <- VL
+    VLMax <- VL$Var1[which.min(-VL$Freq)]
+    KCategory[i]  <- as.character(VLMax)
+  }  
+  return(KCategory)
+}
+pred1 <- MyKNN(DstMtrx,ystrn,k=1)
+
 #=====================================================================
 # Problem 3b
 # - Implement the Bayes classifier using the Multivariate Gaussian
