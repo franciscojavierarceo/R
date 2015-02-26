@@ -1,13 +1,14 @@
-#=====================================================================
+#=======================================================================================================
 # Author: Francisco Javier Arceo
 # Purpose: Homework 2 - Machine Learning for Data Science
 # Date: February 24 2015
-#=====================================================================
+#=======================================================================================================
 # To load the .mat file
+require('scatterplot3d')
 require('R.matlab')
-#=====================================================================
-setwd('/Users/franciscojavierarceo/School/ML/2 - Homework/HMWK2/')
-#=====================================================================
+#=======================================================================================================
+setwd('/Users/franciscojavierarceo/Data/Hmwk/mnist_csv') # Folder
+#=======================================================================================================
 MatLabData <- readMat('mnist_mat.mat')      # Reading the data
 xstrn <- MatLabData$Xtrain                  # Training data
 ystrn <- MatLabData$label.train             # Training data
@@ -88,6 +89,112 @@ Verify(pred5,flt5,xstst,ystst,6)
 #   distribution on the 10 digits learned by the Bayes classifier for
 #   each one.
 #=======================================================================================================
+MatrixBuild <- function(input){
+  output <- data.frame(Level0=rep(0,length(input)))
+  lvls <- unique(input)
+  for(i in 1:length(lvls)){
+    tmp <- ifelse(input==lvls[i],1,0)
+    output[,paste('Level',i-1,sep='')] <- tmp
+  }
+  return(output)
+}
+Mean <- function(x){
+  return( sum( x ) / length(x))
+}
+Stdev <- function(x){ # Sample Standard Deviation
+  return( sqrt( sum( (x - Mean(x))^2 )/length(x)-1 ) )
+}
+correlation <- function(x,y){
+  return( covariance(x,y)/(Stdev(x)*Stdev(y)))
+}
+covariance <- function(x,y){ # Sample Covariance
+  return( sum( (x - Mean(x))*(y-Mean(y)) ) / (length(x)-1) )
+}
+CorMatrix <- function(x){
+  k <- dim(x)[2]
+  out <- matrix(rep(0,length=k*k),ncol=k,nrow=k)  
+  for(i in 1:k){
+    for(j in 1:k){
+      out[i,j] <- correlation(x[i],x[j])
+    }
+  }
+  return(out)
+}
+CovMatrix <- function(x){
+  k <- dim(x)[2]
+  out <- matrix(rep(0,length=k*k),ncol=k,nrow=k)  
+  colnames(out) <- colnames(x)
+  rownames(out) <- colnames(x)
+  for(i in 1:k){
+    for(j in 1:k){
+      out[i,j] <- covariance(x[,i],x[,j])
+    }
+  }
+  return(out)
+}
+PriorMean <- function(y){
+  out <- c()
+  for(j in 1:dim(y)[2]){
+    out[j] <- sum(y[,j]) / length(y[,j])
+  }
+  return(out)
+}
+CondMean <- function(x,y){
+  mu_yk <- c()
+  for(j in 1:dim(y)[2]){
+    mu_yk[j] <- (1/length(y[,j])) * sum( ifelse(y[,j]==1,1,0)* (x))    
+  }
+  return(mu_yk)
+}
+CondVar <- function(x,y,muvec){
+  k <- dim(y)[2]
+  sigma_yk <- matrix(rep(0,k*k),ncol=k,nrow=k)
+  for(j in 1:k){
+    tmp <-  sum( ifelse(y[,j]==1,1,0))%*%(t(x- muvec[j]) %*% (x- muvec[j]))
+    tmp2 <-  sum( ifelse(y[,j]==1,1,0)) * ((x- muvec) %*% t(x- muvec))
+    sigma_yk[j,j] <- tmp
+  }
+}
+CondVar2 <- function(x,y,mnx){
+  return(sum( y * (x-mnx)^2 )/ length(x))
+}
+Bayes <- function()
+#=======================================================================================================
+YMatrix <- MatrixBuild(array(ystrn))
+ClassPriors <- PriorMean(YMatrix)
+Sigma <- CovMatrix(YMatrix)
+ClassCondDensity <- function(muvec,sigma){
+  out <- 
+}
+x1 <- xstrn[1,]
+muy <- CondMean(x1,YMatrix)
+CondVar(x1,YMatrix,muy)
+mu1 <- mean(YMatrix[,1]*x1)
+sigma1 <- sum(YMatrix[,1]*((x1 - mu1)*(x1-mu1)))/length(x1)
+ClassPriors
+# Let's do a small example
+ytmp <- YMatrix[,1]
+xtmp <- x1
+mnvl <- CondMean(xtmp,y)[1]
+tmpmat <- data.frame(X1=rep(0,length(xtmp)))
+for(i in 1:dim(xstrn)[1]){
+  xtmp <- xstrn[i,]
+  mnvl <- CondMean(xtmp,y)[1]
+  s2 <- CondVar2(xtmp,y[,1],mnvl)
+  pred <- (1/ sqrt( 2*pi * s2)) * exp(-(1/2)*((xtmp - mnvl)^2) / s2) 
+  tmpmat[,paste('X',i,sep='')]  <- pred
+  if(i==1){plot(ecdf(pred),xlim=c(0,3))}
+  else {
+    lines(ecdf(pred),col=rainbow(10)[i])
+  }
+}
+out <- rep(0,length(tmpmat[,1]))
+for(i in 2:dim(tmpmat)[2]){
+  out <- tmpmat[,i]*tmpmat[,i-1]  
+}
+lines(ecdf(out),col='red')
+table(y[,1],ifelse(out>=1,1,0))
+head(tmpmat)
 
 #=======================================================================================================
 # Problem 3c
