@@ -211,10 +211,6 @@ word_replace <- function(word,string_vector){
 propercase <- function(x) {
   stri_trans_totitle(x)
 }
-# Trim Whitespace
-trimws <- function (x){
-  gsub("^\\s+|\\s+$", "", x)
-} 
 month_stamp <- function(x){
   return(format(Sys.time(), "%Y%m"))
 }
@@ -387,16 +383,10 @@ glmnet_betas <- function(glmnet_model){
   prcnt0 <- round(len(bs$Coefficients[bs$Coefficients==0])/len(bs$Coefficients),4)
   out <- paste(prcnt0*100,'% of the variables were zero.',sep='')
   Nonzero <- len(bs$Coefficients[bs$Coefficients!=0])
-  out2<- paste(Nonzero,'of the',len(bs$Coefficients),'variables were non-zero.')
+  out2<- paste(Nonzero,'of the variables were non-zero.')
   print(out)
   print(out2)
   return(bs)
-}
-# Return the prediction matrix
-glmnet_preds <- function(glmnet_model,xs){  
-  preds <- c(predict(glmnet_model,xs,s='lambda.min',type='class'))
-  probs <- c(predict(glmnet_model,xs,s='lambda.min',type='response'))
-  return(data.frame(Class=preds,Probs=probs))
 }
 # This will just nicely automate stuff that's annoying
 glmnetout <- function(model,
@@ -578,11 +568,15 @@ fnr <- function(pred,actual){
   }
   return(out)
 }
-BOW2SparseMatrix <- function(var,sparseval=NULL){
+BOW2SparseMatrix <- function(var,sparseval=NULL,tfidf=FALSE){
   # Bag of Words to Sparse Matrix Creator
   var <- as.character(var)
   MyCorpus <- VCorpus(VectorSource(var))
-  CorpusMatrix <-DocumentTermMatrix(MyCorpus)
+  CorpusMatrix <- DocumentTermMatrix(MyCorpus)
+  if(tfidf==TRUE){
+    CorpusMatrix <- DocumentTermMatrix(MyCorpus,control = 
+                                         list(weighting = function(x) weightTfIdf(x, normalize = TRUE)))    
+  }
   print(CorpusMatrix)
   if(length(sparseval)>0){
     CorpusMatrix <- removeSparseTerms(CorpusMatrix,sparseval)
@@ -596,7 +590,7 @@ BOW2SparseMatrix <- function(var,sparseval=NULL){
   return(out)
 }
 # ROC function for one plot
-my_roc <- function(pred,actual,thresh=0,add_p=0,colr='red',ttl=''){
+my_roc <- function(pred,actual,thresh=0,add_p=0,colr='red'){
   mydf <- data.frame(cont_pred=pred,actual_pred=actual)
   mydf$true_bin <- with(mydf,ifelse(actual_pred>thresh,1,0))
   mydf$sort <-with(mydf,cont_pred + min(cont_pred)+1)
@@ -606,26 +600,9 @@ my_roc <- function(pred,actual,thresh=0,add_p=0,colr='red',ttl=''){
   index <- seq(from=-.1,to=1.2,length=n) 
   roc_pred <- with(mydf,prediction(pred_rank,true_bin))
   perf <-  performance(roc_pred,'tpr','fpr')
-  main_title <- paste(ttl,'ROC Curve \n','AUC =',round(auc(actual,pred),4))
+  main_title <- paste('ROC Curve \n','AUC =',round(auc(actual,pred),4))
   plot(perf,col=colr,main=main_title,add=add_p);grid(5,5,'gray44')
   lines(index,index,col="black",lty=1)
-}
-cmplot <- function(pred,actual,colrs=c('2','2','4','4'),ymax=1){
-  # This is a confusion matrix plot
-  print(table(pred,actual))
-  sdf <- data.frame(table(pred,actual))
-  sdf$Names <- factor(paste('Pred=',sdf$pred,' | Actual=',sdf$actual,sep=''))
-  sdf$Names <- factor(sdf$Names,levels=sdf$Names[order(sdf$Freq)])
-  sdf$Percent <- sdf$Freq/sum(sdf$Freq)
-  sdf$Plabels <- paste(round(sdf$Percent,3)*100,'%',sep='')
-  pout <- ggplot(sdf,aes(x=Names,y=Percent,fill=Names))+geom_bar(stat='identity')+
-    theme_bw()+coord_flip()+geom_text(aes(label=Plabels),size=5,hjust = -0.05)+
-    scale_y_continuous(labels=percent_format())+xlab('')+
-    scale_fill_manual(values=colrs)+ylim(c(0,ymax))+ylab('Percent of Data')+
-    theme(legend.position='bottom',legend.title=element_blank(),
-    axis.text=element_text(size=12,face='bold'))
-  print("Ignore any warning signs")
-  pout
 }
 # The function below looks at the fit statistics of various predictions
 predcompare <- function(pred_df,actual){
@@ -731,12 +708,15 @@ ownslift<-function(pred, orderby,actual, w=NULL, n=10) {
 }
 
 # A prettier version of Owen's original Lift Function
-mylift<-function(pred, actual, w=NULL, n=10,yscl='dollar',metric=NULL){   	
+mylift<-function(pred, orderby=NULL, actual, w=NULL, n=10,yscl='dollar',metric=NULL){   	
   if (length(w)==0) {
     w<-rep(1.0, length(pred))
   }
+  if (is.null(orderby)==TRUE){
+  	orderby <- pred
+  }
   pred <- as.numeric(pred)
-  v<-data.frame(o=pred, p=pred, a=actual, w=w)
+  v<-data.frame(o=orderby, p=pred, a=actual, w=w)
   v<-v[order(v$o),]
   v$cumm_w<-cumsum(v$w)
   v$cumm_y<-cumsum(v$w*v$a)
@@ -903,11 +883,12 @@ my_gplot <- function(var1,var2=NULL,var_name1='X Variable',var_name2='Y Variable
   # }
 }
 # Bootstrapped Standard Errors in GLMNET
-glmnet_boot <- function(ydep,xs,trainfilter,model,b=1e3,myalpha){
+glmnet_boot <- function(xs,trainfilter,model,b=1e3,myalpha){
   lamb <- model$lambda.min
   train_xs <- xs[trainfilter==1,]
   n_obs <- dim(train_xs)[1]
   bs_out<-data.frame(as.matrix(t(coef(model,s='lambda.min'))))
+  for(i in 1:dim(bs_out)[2]){bs_out[,i] <- 0 }
   # one thousand bootstrap estimates
   for(i in 1:b){
     indx <- sample(1:n_obs,1e4,replace=TRUE)
@@ -919,21 +900,17 @@ glmnet_boot <- function(ydep,xs,trainfilter,model,b=1e3,myalpha){
                      lambda=lamb)
     tmp <- data.frame(as.matrix(t(coef(bs_mod))))
     bs_out <- rbind(bs_out,tmp)
-    if((i%%100)==0){
-    	print(paste("Iteration",i,"complete."))
-    }
   }
   names(bs_out)[1] <- '(Intercept)'
   n <- dim(bs_out)[1]
   bs_out <- bs_out[2:n,]
   final <- data.frame(mean=sapply(bs_out,FUN=mean))
   final$SEs <- sapply(bs_out,FUN=sd)
-  tmp <- data.frame(var=as.matrix(coef(model,s='lambda.min')))
+  tmp <- data.frame(var=as.matrix(coef(glm_mod_leg_ind,s='lambda.min')))
   final$mean <- tmp[,1]
   final$CI_025 <- final$mean-1.94*final$SEs
   final$CI_975 <- final$mean+1.94*final$SEs
   names(final)[1] <- 'Estimate'
-  final$T_stat <- final$Estimate / final$SEs
   return(final)
 }
 # Bootstrap AUC
@@ -960,14 +937,8 @@ BootStrapAUC <- function(preds,actual,BS_Reps=100,CI_Lower=0.025,CI_Upper=0.975)
   plot(ecdf(auc_out),main=ttle2,col='red',lty=1,
        xlab='Area Under the Curve (AUC)',
        ylab='Cumulative Percent');grid(5,5,'gray44')
-  par(mfrow=c(1,1))
 }
 PartialDependence <- function(xs,varname,model_name,upper=90){
-  # This is a partial depedence plot for a given feature
-  # this takes in a column, zeros out all of the other columns
-  # then populates the feature with the min value to the 
-  # highest specified percentile value (for max, set upper=100)
-  # then gives the partial prediction.
   n <- 100
   k <- dim(xs)[2]
   mfx <- xs[1:n,]
@@ -992,10 +963,6 @@ PartialDependence <- function(xs,varname,model_name,upper=90){
   }
 }
 EmpiricalDependence <- function(xs,varname,model_name,RankNum=10){
-  # This is a partial dependence plot for a given feature
-  	# this takes in a column, zeros out all of the other columns,
-  	# then sorts by the features value and takes the average 
-  	# prediction for that bucket rank -- the default is 10
   n <- dim(xs)[1]
   k <- dim(xs)[2]
   mfx <- xs[1:n,]
