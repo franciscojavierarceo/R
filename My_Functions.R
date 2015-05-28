@@ -195,6 +195,10 @@ mylag<-function(x,shift_by){
     out<-x
   return(out)
 }
+# Trim Whitespace
+trimws <- function (x){
+  gsub("^\\s+|\\s+$", "", x)
+} 
 # Quickly generates an indicator for simple string search
 word_search <- function(word,string_vector){
   out <- c(regexpr(toupper(word),toupper(string_vector)))
@@ -233,8 +237,30 @@ ptable <- function(var,sort=T){
   x <- x[order(x$Freq,decreasing=sort),]
   return(x)
 }
-natble<- function(var){
+na_table<- function(var){
   return(table(is.na(var)))
+}
+ReduceCat <- function(df,xvar,dep,minval=10,depminval=NULL){
+  tmpdf <- df[,c(xvar,dep)]
+  names(tmpdf) <- c('xvar','yvar')
+  out <- sqldf('select xvar,sum(yvar) as yvar_tot, sum(1) as cnt
+               from tmpdf group by 1')
+  out$xvar[out$cnt < minval] <- 'ALL OTHERS'
+  if(len(depminval)>0){
+   out$xvar[out$yvar_tot < depminval] <- 'ALL OTHERS' 
+  } else {
+    out$xvar[out$cnt < minval] <- 'ALL OTHERS' 
+  }
+  out2 <- sqldf("select xvar, sum(yvar_tot) as yvar_tot, sum(cnt) as cnt
+                from out group by 1")
+  final <- sqldf('select b.xvar as newxvar, b.yvar_tot as ytot,
+                 b.cnt from tmpdf a 
+                 left join out2 b
+                 on a.xvar = b.xvar')
+  final$newxvar[is.na(final$newxvar)] <- 'ALL OTHERS'
+  final$ytot[final$newxvar=='ALL OTHERS'] <- out2$yvar_tot[out2$xvar=='ALL OTHERS']
+  final$cnt[final$newxvar=='ALL OTHERS'] <- out2$cnt[out2$xvar=='ALL OTHERS']
+  return(final)
 }
 # A function to summarize discrete variables
 cat_summary <- function(df,x,percent=T){
@@ -568,14 +594,14 @@ fnr <- function(pred,actual){
   }
   return(out)
 }
-BOW2SparseMatrix <- function(var,sparseval=NULL,tfidf=FALSE){
+BOW2SparseMatrix <- function(var,sparseval=NULL,tf=FALSE,idf=FALSE){
   # Bag of Words to Sparse Matrix Creator
   var <- as.character(var)
   MyCorpus <- VCorpus(VectorSource(var))
   CorpusMatrix <- DocumentTermMatrix(MyCorpus)
-  if(tfidf==TRUE){
+  if(tf==TRUE){
     CorpusMatrix <- DocumentTermMatrix(MyCorpus,control = 
-                                         list(weighting = function(x) weightTfIdf(x, normalize = TRUE)))    
+                                         list(weighting = function(x) weightTfIdf(x, normalize = idf)))    
   }
   print(CorpusMatrix)
   if(length(sparseval)>0){
@@ -590,7 +616,7 @@ BOW2SparseMatrix <- function(var,sparseval=NULL,tfidf=FALSE){
   return(out)
 }
 # ROC function for one plot
-my_roc <- function(pred,actual,thresh=0,add_p=0,colr='red'){
+my_roc <- function(pred,actual,thresh=0,add_p=0,colr='red',ttl=''){
   mydf <- data.frame(cont_pred=pred,actual_pred=actual)
   mydf$true_bin <- with(mydf,ifelse(actual_pred>thresh,1,0))
   mydf$sort <-with(mydf,cont_pred + min(cont_pred)+1)
@@ -600,7 +626,7 @@ my_roc <- function(pred,actual,thresh=0,add_p=0,colr='red'){
   index <- seq(from=-.1,to=1.2,length=n) 
   roc_pred <- with(mydf,prediction(pred_rank,true_bin))
   perf <-  performance(roc_pred,'tpr','fpr')
-  main_title <- paste('ROC Curve \n','AUC =',round(auc(actual,pred),4))
+  main_title <- paste(ttl,'\n','ROC Curve \n','AUC =',round(auc(actual,pred),4))
   plot(perf,col=colr,main=main_title,add=add_p);grid(5,5,'gray44')
   lines(index,index,col="black",lty=1)
 }
@@ -682,7 +708,7 @@ mysplinefunc <- function(x,y,k=10,plt=F,out=F,print_ranks=F,regline=T,main='Spli
   }
 }
 # Owen's Lift
-ownslift<-function(pred, orderby,actual, w=NULL, n=10) {
+	ownslift<-function(pred, orderby,actual, w=NULL, n=10) {
   if (length(w)==0) {
     w<-rep(1.0, length(pred))
   }
@@ -883,7 +909,7 @@ my_gplot <- function(var1,var2=NULL,var_name1='X Variable',var_name2='Y Variable
   # }
 }
 # Bootstrapped Standard Errors in GLMNET
-glmnet_boot <- function(xs,trainfilter,model,b=1e3,myalpha){
+glmnet_boot <- function(ydep,xs,trainfilter,model,b=1e3,myalpha){
   lamb <- model$lambda.min
   train_xs <- xs[trainfilter==1,]
   n_obs <- dim(train_xs)[1]
@@ -900,18 +926,27 @@ glmnet_boot <- function(xs,trainfilter,model,b=1e3,myalpha){
                      lambda=lamb)
     tmp <- data.frame(as.matrix(t(coef(bs_mod))))
     bs_out <- rbind(bs_out,tmp)
+    if((i%%100)==0){
+    	print(paste("Iteration",i,"complete."))
+    }
   }
   names(bs_out)[1] <- '(Intercept)'
   n <- dim(bs_out)[1]
   bs_out <- bs_out[2:n,]
   final <- data.frame(mean=sapply(bs_out,FUN=mean))
   final$SEs <- sapply(bs_out,FUN=sd)
-  tmp <- data.frame(var=as.matrix(coef(glm_mod_leg_ind,s='lambda.min')))
+  tmp <- data.frame(var=as.matrix(coef(model,s='lambda.min')))
   final$mean <- tmp[,1]
   final$CI_025 <- final$mean-1.94*final$SEs
   final$CI_975 <- final$mean+1.94*final$SEs
   names(final)[1] <- 'Estimate'
+  final$T_stat <- final$Estimate / final$SEs
   return(final)
+}
+glmnet_preds <- function(glmnet_model,xs){
+	preds <- c(predict(glmnet_model,xs,s='lambda.min',type='class'))
+	probs <- c(predict(glmnet_model,xs,s='lambda.min',type='response'))
+	return(data.frame(Class=preds,Probs=probs))
 }
 # Bootstrap AUC
 BootStrapAUC <- function(preds,actual,BS_Reps=100,CI_Lower=0.025,CI_Upper=0.975){
@@ -937,8 +972,14 @@ BootStrapAUC <- function(preds,actual,BS_Reps=100,CI_Lower=0.025,CI_Upper=0.975)
   plot(ecdf(auc_out),main=ttle2,col='red',lty=1,
        xlab='Area Under the Curve (AUC)',
        ylab='Cumulative Percent');grid(5,5,'gray44')
+  par(mfrow=c(1,1))
 }
 PartialDependence <- function(xs,varname,model_name,upper=90){
+	# This is a partial depedence plot for a given feature
+	# this takes in a column, zeros out all of the other columns
+	# then populates the feature with the min value to the 
+	# highest specified percentile value (for max, set upper=100)
+	# then gives the partial prediction.
   n <- 100
   k <- dim(xs)[2]
   mfx <- xs[1:n,]
@@ -963,6 +1004,10 @@ PartialDependence <- function(xs,varname,model_name,upper=90){
   }
 }
 EmpiricalDependence <- function(xs,varname,model_name,RankNum=10){
+	# This is a partial dependence plot for a given feature
+	# this takes in a column, zeros out all of the other columns,
+	# then sorts by the features value and takes the average 
+	# prediction for that bucket rank -- the default is 10
   n <- dim(xs)[1]
   k <- dim(xs)[2]
   mfx <- xs[1:n,]
@@ -1120,6 +1165,25 @@ GBMExpVar <- function(tmpdf,tflt,y,xvar1,xvar2=NULL,prnt=T){
 #========================================================================================================================
 # ROC databuild and use.
 #========================================================================================================================
+cmplot <- function(pred,actual,colrs=c('2','2','4','4'),ymax=1,ttl){
+  # This is a confusion matrix plot
+  print(table(pred,actual))
+  sdf <- data.frame(table(pred,actual))
+  sdf$Names <- factor(paste('Pred=',sdf$pred,' | Actual=',sdf$actual,sep=''))
+  sdf$Names <- factor(sdf$Names,levels=sdf$Names[order(sdf$Freq)])
+  sdf$Percent <- sdf$Freq/sum(sdf$Freq)
+  accuracy <- round(sum(diag(table(pred,actual)))/length(pred),4)*100
+  ttl <- paste("The Classification Accuracy is ", accuracy,'% \n',ttl,sep='')
+  sdf$Plabels <- paste(round(sdf$Percent,3)*100,'%',sep='')
+  pout <- ggplot(sdf,aes(x=Names,y=Percent,fill=Names))+geom_bar(stat='identity')+
+  theme_bw()+coord_flip()+geom_text(aes(label=Plabels),size=5,hjust = -0.05)+
+  scale_y_continuous(labels=percent_format())+xlab('')+ggtitle(ttl)+
+  scale_fill_manual(values=colrs)+ylim(c(0,ymax))+ylab('Percent of Data')+
+  theme(legend.position='bottom',legend.title=element_blank(),
+  axis.text=element_text(size=12,face='bold'))
+  print("Ignore any warning signs")
+  pout
+}
 rocdata <- function(grp, pred){
   # Produces x and y coordinates for ROC curve plot
   # Arguments: grp - labels classifying subject status
@@ -1364,6 +1428,8 @@ PredictorImportance<- function(xs,var_list,ydep,model,filename='',newvarnames=NA
   outlist[[2]] <- outdf
   return(outlist)
 }
+#========================================================================================================================
+print("Your Functions are now loaded, dawg.")
 #========================================================================================================================
 ######################################################## END ############################################################
 #========================================================================================================================
