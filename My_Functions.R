@@ -3,6 +3,7 @@ require(Hmisc)
 require(devtools)
 require(caret)
 # install_github('tqchen/xgboost',subdir='R-package')
+# devtools::install_github('dmlc/xgboost',subdir='R-package')
 require(pROC)
 require(verification)
 require(xgboost)
@@ -26,6 +27,7 @@ require(doParallel)
 require(randomForest)
 options(gsubfn.engine = "R")
 require(sqldf)
+require(plyr)
 #========================================================================================================================
 # Author: Francisco Javier Arceo
 # Contact: francisco.arceo@cba.com.au
@@ -35,13 +37,31 @@ require(sqldf)
 #========================================================================================================================
 # Easy things that are annoying to constantly repeat
 #========================================================================================================================
+# Use this to replace missing categorical variables with a level that says "MISSING"
+replacefactor <- function(x,replacement_value="MISSING"){
+  x <- trimws(as.character(x))
+  x[x==''] <- replacement_value
+  x[is.na(x)==TRUE] <- replacement_value
+  return(factor(x))
+}
+# This does mean replacement for continuous variables
+replacecont <- function(x){
+  x[is.na(x)] <- mean(x,na.rm=T)
+  return(x)
+}
+num <- function(x){
+  return(as.numeric(x))
+}
+char<- function(x){
+  return(as.character(x))
+}
 # This cleans up data
 ReplaceMissingFunc<- function(mydf,start_col=2){
   # You have to specify the starting column
   print(paste('The input data has',ncol(mydf),'columns.'))
   j <- ncol(mydf)
   for(i in start_col:j){
-    if(is.factor(mydf[,i])==TRUE){
+    if(is.factor(mydf[,i])==TRUE | is.character(mydf[,i])){
       mydf[,i] <- replacefactor(mydf[,i])
     }
     else if(is.numeric(mydf[,i])==TRUE){
@@ -53,6 +73,17 @@ ReplaceMissingFunc<- function(mydf,start_col=2){
   }
   print(paste('The output data has',ncol(mydf),'columns.'))
   return(mydf)
+}
+Describe <- function(mydf){
+  # Function to describe variables
+  out <- data.frame(Names=colnames(mydf))
+  out$Type <- ''
+  out$Levels <- 0
+  for(i in 1:dim(mydf)[2]){
+    out$Type[i] <- class(mydf[,i])
+    out$Levels[i] <- length(unique(mydf[,i]))
+  }
+  return(out)
 }
 # Summary of continuous variables in a data frame
 # I prefer this because it allows me to refer to these summaries in a dataframe
@@ -86,22 +117,6 @@ cvarsum <-function(df){
   }
   out$Variable_Name <- names(df)
   return(out)
-}
-# Use this to replace missing categorical variables with a level that says "MISSING"
-replacefactor <- function(x,replacement_value="MISSING"){
-  x <- as.character(x)
-  x[x==''] <- replacement_value
-  x[is.na(x)==TRUE] <- replacement_value
-  return(factor(x))
-}
-# This does mean replacement for continuous variables
-replacecont <- function(x){
-  x[is.na(x)] <- mean(x,na.rm=T)
-  return(x)
-}
-num <- function(x){
-  x <- as.numeric(x)
-  return(x)
 }
 # Decile function, and can be extended to percentiles using the n parameter
 deciles <- function(x,n=10,print=F){
@@ -224,8 +239,13 @@ day_stamp <- function(x){
 date_stamp <- function(x){
   return(format(Sys.time(), "%Y%m%d_%H%M"))
 }
-export <- function(mydf,filename){
-  outfilename <- paste(date_stamp(),'_',filename,'.csv',sep='')
+export <- function(mydf,filename,d='date'){
+  if(d=='date'){
+    outfilename <- paste(date_stamp(),'_',filename,'.csv',sep='')    
+  }
+  if(d=='day'){
+    outfilename <- paste(day_stamp(),'_',filename,'.csv',sep='')
+  }
   write.csv(x=mydf,
             file=outfilename,
             row.names=F)
@@ -243,6 +263,7 @@ na_table<- function(var){
 ReduceCat <- function(df,xvar,dep,minval=10,depminval=NULL){
   tmpdf <- df[,c(xvar,dep)]
   names(tmpdf) <- c('xvar','yvar')
+  tmpdf$xvar <- as.character(tmpdf$xvar)
   out <- sqldf('select xvar,sum(yvar) as yvar_tot, sum(1) as cnt
                from tmpdf group by 1')
   out$xvar[out$cnt < minval] <- 'ALL OTHERS'
@@ -406,6 +427,7 @@ myformula <- function(features,y=NULL){
 glmnet_betas <- function(glmnet_model){
   bs <- as.matrix(coef(glmnet_model,s='lambda.min'))
   bs <- data.frame(bs) ; names(bs) <- 'Coefficients'
+  bs <- data.frame(Var=row.names(bs),Coefficients=bs$Coefficients)
   prcnt0 <- round(len(bs$Coefficients[bs$Coefficients==0])/len(bs$Coefficients),4)
   out <- paste(prcnt0*100,'% of the variables were zero.',sep='')
   Nonzero <- len(bs$Coefficients[bs$Coefficients!=0])
@@ -550,58 +572,59 @@ mygini<-function(pred, actual) {
   gini<-with(v,1-2* sum(cumm_y*w)/(sum(a*w)*total_w))
   return(gini)
 }
+perf <- function(pred,actual,tfilt,vfilt){
+  if(len(unique(actual))==2){
+    validperf <- auc(actual[vfilt],pred[vfilt])
+    trainperf <- auc(actual[tfilt],pred[tfilt])
+  } else {
+    validperf <- rmse(pred[vfilt],actual[vfilt])
+    trainperf <- rmse(pred[tfilt],actual[tfilt])    
+  }
+    return(list(TrainingError =trainperf,
+                ValidationError=validperf))    
+}
+printperf <- function(pred,actual,tfilt,vfilt){
+  out <- perf(pred,actual,tfilt,vfilt)
+  if(len(unique(actual))>2){
+    print(paste('The Training Error is',out$TrainingError))
+    print(paste('The Validation Error is',out$ValidationError))
+  } else {
+    print(paste('The Training AUC is',out$TrainingError))
+    print(paste('The Validation AUC is',out$ValidationError))
+  }
+}
 # True Positive Rate
 tpr <- function(pred,actual){
-  smry_table <- data.frame(table(pred,actual))
-  num <-smry_table$Freq[smry_table$pred==1 & smry_table$actual==1]
-  den <- sum(smry_table$Freq[smry_table$actual==1])
-  out <- num/den
-  if(length(out)==0){
-    out <- NA
-  }
-  return(out)
+  return(sum(pred==1 & actual==1) / sum(actual==1))
 }
 # True Negative Rate
 tnr <- function(pred,actual){
-  smry_table <- data.frame(table(pred,actual))
-  num <-smry_table$Freq[smry_table$pred==0 & smry_table$actual==0]
-  den <- sum(smry_table$Freq[smry_table$actual==0])
-  out <- num/den
-  if(length(out)==0){
-    out <- NA
-  }
-  return(out)
+  return(sum(pred==0 & actual==0) / sum(actual==0))
 }
 # False Positive Rate
 fpr <- function(pred,actual){
-  smry_table <- data.frame(table(pred,actual))
-  num <-smry_table$Freq[smry_table$pred==1 & smry_table$actual==0]
-  den <- sum(smry_table$Freq[smry_table$actual==0])
-  out <- num/den
-  if(length(out)==0){
-    out <- NA
-  }
-  return(out)
+  return(sum(pred==1 & actual==0) / sum(actual==0))
 }
 # False Negative Rate
 fnr <- function(pred,actual){
-  smry_table <- data.frame(table(pred,actual))
-  num <-smry_table$Freq[smry_table$pred==0 & smry_table$actual==1]
-  den <- sum(smry_table$Freq[smry_table$actual==1])
-  out <- num/den
-  if(length(out)==0){
-    out <- NA
-  }
-  return(out)
+  return(sum(pred==0 & actual==1) / sum(actual==0))
 }
-BOW2SparseMatrix <- function(var,sparseval=NULL,tf=FALSE,idf=FALSE){
+coalesce <- function(...) {
+  Reduce(function(x, y) {
+    i <- which(is.na(x))
+    x[i] <- y[i]
+    x},
+    list(...)) 
+}
+Build_STDM <- function(var,sparseval=NULL,tfidf=FALSE,minval=1){
   # Bag of Words to Sparse Matrix Creator
   var <- as.character(var)
   MyCorpus <- VCorpus(VectorSource(var))
-  CorpusMatrix <- DocumentTermMatrix(MyCorpus)
-  if(tf==TRUE){
+  CorpusMatrix <- DocumentTermMatrix(MyCorpus,control=list(global=c(minval,Inf)))
+  if(tfidf==TRUE){
     CorpusMatrix <- DocumentTermMatrix(MyCorpus,control = 
-                                         list(weighting = function(x) weightTfIdf(x, normalize = idf)))    
+                                         list(weighting = function(x) weightTfIdf(x, normalize = idf),
+                                              global= c(minval,Inf)))    
   }
   print(CorpusMatrix)
   if(length(sparseval)>0){
@@ -974,7 +997,7 @@ BootStrapAUC <- function(preds,actual,BS_Reps=100,CI_Lower=0.025,CI_Upper=0.975)
        ylab='Cumulative Percent');grid(5,5,'gray44')
   par(mfrow=c(1,1))
 }
-PartialDependence <- function(xs,varname,model_name,upper=90){
+PartialDependence <- function(xs,varname,model_name,upper=90,colr='red'){
 	# This is a partial depedence plot for a given feature
 	# this takes in a column, zeros out all of the other columns
 	# then populates the feature with the min value to the 
@@ -994,7 +1017,7 @@ PartialDependence <- function(xs,varname,model_name,upper=90){
     y_dx <- predict(model_name,mfx)
     mfx_df <- data.frame(y_dx,xvar)
     plt <- ggplot(mfx_df,aes(x=xvar,y=y_dx))+
-      geom_line(colour='red ')+
+      geom_line(colour=colr)+
       scale_y_continuous(labels=comma)+
       theme_bw()+xlab(varname)+ylab('Partial Prediction')+
       ggtitle(paste('Estimated Partial Prediciton of',varname))
@@ -1177,10 +1200,9 @@ cmplot <- function(pred,actual,colrs=c('2','2','4','4'),ymax=1,ttl){
   sdf$Plabels <- paste(round(sdf$Percent,3)*100,'%',sep='')
   pout <- ggplot(sdf,aes(x=Names,y=Percent,fill=Names))+geom_bar(stat='identity')+
   theme_bw()+coord_flip()+geom_text(aes(label=Plabels),size=5,hjust = -0.05)+
-  scale_y_continuous(labels=percent_format())+xlab('')+ggtitle(ttl)+
   scale_fill_manual(values=colrs)+ylim(c(0,ymax))+ylab('Percent of Data')+
   theme(legend.position='bottom',legend.title=element_blank(),
-  axis.text=element_text(size=12,face='bold'))
+  axis.text=element_text(size=12,face='bold'))+xlab('')+ggtitle(ttl)
   print("Ignore any warning signs")
   pout
 }
@@ -1278,7 +1300,7 @@ rocplot.multiple <- function(test.data.list, groupName = "grp", predName = "res"
   p <- ggplot(plotdata$roc, aes(x = x, y = y)) +
     geom_line(aes(colour = .id)) +
     geom_abline (intercept = 0, slope = 1) +
-    theme_bw() +
+    theme_bw() +ggtitle(title)+
     scale_x_continuous("False Positive Rate (1-Specificity)") +
     scale_y_continuous("True Positive Rate (Sensitivity)") +
     scale_colour_brewer(palette="Set1", breaks = names(test.data.list), labels = paste(names(test.data.list), ": ", annotation, sep = "")) +
@@ -1357,7 +1379,7 @@ xgboost_cv <- function(xs,yvar,tflt,loss='binary:logistic',nfolds=10,nrounds=200
   return(smry$MaxValueIterated[dim(smry)[1]])
 }
 # Useful for modeling
-PredictorImportance<- function(xs,var_list,ydep,model,filename='',newvarnames=NA,ToCSV=F){
+PredictorImportance<- function(xs,var_list,ydep,model,filename='',newvarnames=NA,ToCSV=F,ttl=NULL){
   # This finds the predictor importance for GLMNET and Other types of models
   Sys.setlocale('LC_ALL','C')  # Takes care of foreign characters
   mfx <- xs
@@ -1415,15 +1437,17 @@ PredictorImportance<- function(xs,var_list,ydep,model,filename='',newvarnames=NA
   outdf <- outdf[order(outdf$RelativeImportance,decreasing=T),]
   outdf$varbuckets <- factor(outdf$varbuckets,
                              levels=outdf$varbuckets[order(outdf$RelativeImportance)])
+  if(length(ttl)==0){
+    ttl <- "Relative Predictor Importance"
+  }
   myplt <- ggplot(outdf,aes(x=varbuckets,y=RelativeImportance))+
     geom_bar(stat='identity',fill='blue')+coord_flip()+
     theme_bw()+xlab('')+
     ylab('Model Degradation from Exclusion of Feature')+
-    ggtitle("Relative Predictor Importance")
+    ggtitle(ttl)
   outlist <- list()
   outlist[[1]] <- myplt
   outdf <- outdf[,c('varbuckets','RMSE_Reduction','RelativeImportance')]
-  outdf$RMSE_Reduction <- round(outdf$RMSE_Reduction,4)
   names(outdf) <-c('Variable','Model Improvement','Relative Importance')
   outlist[[2]] <- outdf
   return(outlist)
