@@ -5,8 +5,8 @@ require(caret)
 # install_github('tqchen/xgboost',subdir='R-package')
 # devtools::install_github('dmlc/xgboost',subdir='R-package')
 require(pROC)
-require(verification)
-require(xgboost)
+# require(verification)
+# require(xgboost)
 require(tm)
 require(gbm)
 require(foreach)
@@ -15,8 +15,8 @@ require(mgcv)
 require(data.table)
 require(glmnet)
 require(Matrix)
-require(coefplot)
-require(stringi)
+# require(coefplot)
+# require(stringi)
 require(ROCR)
 require(gdata)
 require(reshape2)
@@ -101,7 +101,7 @@ cvarsum <-function(df){
                     Missing=rep(0,k),
                     N_Distinct=rep(0,k))
   for(i in 1:k){
-    out$Prcnt_0[i]   	<- quantile(df[,i],probs=0.00)[[1]]
+    out$Prcnt_0[i]     <- quantile(df[,i],probs=0.00)[[1]]
     out$Prcnt_25[i]  	<- quantile(df[,i],probs=0.25)[[1]]
     out$Prcnt_75[i]		<- quantile(df[,i],probs=0.75)[[1]]
     out$Prcnt_100[i]	<- quantile(df[,i],probs=1.00)[[1]]
@@ -210,14 +210,22 @@ mylag<-function(x,shift_by){
     out<-x
   return(out)
 }
+BuildXS <- function(df) {
+  # turn character variables into factors
+  df[sapply(df, is.character)] <- lapply(df[sapply(df, is.character)], as.factor)
+  # convert to sparse model matrix, no intercept, including dummy variables for ALL levels via constrast control
+  mat <- sparse.model.matrix(~.-1, data=df, contrasts.arg = lapply(df[,sapply(df, is.factor)], contrasts, contrasts=FALSE))
+  return(mat)
+}
 # Trim Whitespace
 trimws <- function (x){
   gsub("^\\s+|\\s+$", "", x)
 } 
 # Quickly generates an indicator for simple string search
 word_search <- function(word,string_vector){
-  out <- c(regexpr(toupper(word),toupper(string_vector)))
-  out <- ifelse(out>0,1,0)
+  # Returns a binary variable 
+  out <- num(regexpr(word,char(string_vector),ignore.case=T)>0)
+  out[is.na(out)] <- 0
   return(out)
 }
 # I like code that's more explicit than "sub", so I made this 
@@ -239,12 +247,19 @@ day_stamp <- function(x){
 date_stamp <- function(x){
   return(format(Sys.time(), "%Y%m%d_%H%M"))
 }
+make_date <- function(x){
+  # Use this after SQLDF screws up a date
+  as.Date(x,origin='1970-01-01')
+}
 export <- function(mydf,filename,d='date'){
   if(d=='date'){
     outfilename <- paste(date_stamp(),'_',filename,'.csv',sep='')    
   }
   if(d=='day'){
     outfilename <- paste(day_stamp(),'_',filename,'.csv',sep='')
+  }
+  if(d=='none'){
+    outfilename <- paste(filename,'.csv',sep='')
   }
   write.csv(x=mydf,
             file=outfilename,
@@ -268,7 +283,7 @@ ReduceCat <- function(df,xvar,dep,minval=10,depminval=NULL){
                from tmpdf group by 1')
   out$xvar[out$cnt < minval] <- 'ALL OTHERS'
   if(len(depminval)>0){
-   out$xvar[out$yvar_tot < depminval] <- 'ALL OTHERS' 
+    out$xvar[out$yvar_tot < depminval] <- 'ALL OTHERS' 
   } else {
     out$xvar[out$cnt < minval] <- 'ALL OTHERS' 
   }
@@ -282,6 +297,26 @@ ReduceCat <- function(df,xvar,dep,minval=10,depminval=NULL){
   final$ytot[final$newxvar=='ALL OTHERS'] <- out2$yvar_tot[out2$xvar=='ALL OTHERS']
   final$cnt[final$newxvar=='ALL OTHERS'] <- out2$cnt[out2$xvar=='ALL OTHERS']
   return(final)
+}
+# Univariate correlation matrix for a bunch of features
+UniCorrMatrix <- function(xs,yvar,tfilt,vfilt){
+  cor_out <- data.frame(Name=rep('',ncol(xs)),
+                        Correlation=rep(0,ncol(xs)),
+                        T_stat=rep(0,ncol(xs)),
+                        FullRsq =rep(0,ncol(xs)),
+                        TrainRsq=rep(0,ncol(xs)),
+                        ValidRsq=rep(0,ncol(xs)))
+  cor_out$Name <- char(cor_out$Name)
+  for(i in 1:ncol(xs)){
+    tmp <- cor.test(xs[,i],yvar)
+    cor_out$Name[i] <- char(colnames(xs)[i])
+    cor_out$Correlation[i] <- tmp$estimate
+    cor_out$T_stat[i] <- tmp$statistic
+    cor_out$FullRsq[i] <- round(rsq(xs[,i],yvar,F),4)
+    cor_out$TrainRsq[i] <- round(rsq(xs[,i][tfilt],yvar[tfilt],F),4)
+    cor_out$ValidRsq[i] <- round(rsq(xs[,i][vfilt],yvar[vfilt],F),4)
+  }
+  return(cor_out)  
 }
 # A function to summarize discrete variables
 cat_summary <- function(df,x,percent=T){
@@ -331,6 +366,25 @@ cat_dep_summary <- function(df,x,y,fun='mean',indx=T,plt=FALSE){
   if(plt==TRUE & indx==FALSE){
     outplt <- with(out,plot(var,Average_Y,col='blue',pch=16,type='b'))
     return(outplt)
+  }
+}
+# 3d plot
+my3dplot <- function(z,x,y,colrglow='blue',colrghigh='pink',single=F){
+  mdf <- data.frame(z,x,y)
+  znme <- deparse(substitute(z)); xnme <- deparse(substitute(x)); ynme <- deparse(substitute(y));
+  p <- wireframe(z ~ x * y, data=mdf,drape=T,colorkey=TRUE,zlab=znme,xlab=xnme,ylab=ynme,
+                 col.regions = colorRampPalette(c(colrglow,colrghigh))(100), light.source=c(10,0,10))
+  if(single==T){
+    return(p)
+  } else {
+    npanel <- c(4, 2)
+    rotx <- c(-50, -80)
+    rotz <- seq(30, 300, length = npanel[1]+1)
+    update(p[rep(1, prod(npanel))], layout = npanel,
+           panel = function(..., screen) {
+             panel.wireframe(..., screen = list(z = rotz[current.column()],
+                                                x = rotx[current.row()]))
+           })      
   }
 }
 # This creates a dot plot of the dependent variable by a 
@@ -386,7 +440,7 @@ my_exp1<-function(d1, Xvar1, Xvar2, y, AverageY, filter, cred_k=10, r_k=0){
   # Xvar2 is the second factor variable
   # y is the actual
   # AverageY is the mean of the dependent variable (training sample)
-  # filter is the trianing filter (can be true/false)
+  # filter is the training filter (can be true/false)
   # r_k is the random jitter size
   # cred_k is the credibility adjustment size 
   # To do the one way just create a dummy variable with all ones
@@ -423,17 +477,62 @@ myformula <- function(features,y=NULL){
   }
   return(out)
 }
+glmnet_train <- function(xs,ys,trnflt,tstflt,alphaval,dist='binomial',lossmetric=myauc,opt=which.max){
+  glmnet_model <- glmnet(x=xs[trnflt,],
+                         y=ys[trnflt],
+                         family=dist,
+                         alpha=alphaval)
+  trnprf <- c() ; tstprf <- c();
+  for(i in 1:length(glmnet_model$lambda)){
+    yhat <- c(predict(glmnet_model,xs,glmnet_model$lambda[i],type='response'))
+    trnprf[i] <- lossmetric(yhat[trnflt],ys[trnflt])
+    tstprf[i] <- lossmetric(yhat[tstflt],ys[tstflt])
+  }
+  # Getting the best value
+  best <- glmnet_model$lambda[opt(tstprf)]
+  OptimalTestVal <- tstprf[opt(tstprf)]
+  yhat <- c(predict(glmnet_model,newx=xs,s=best))
+  bs <- data.frame(as.matrix(coef(glmnet_model,s=best)))
+  bs <- data.frame(Names=rownames(bs),Betas=bs$X1)
+  xdf <- data.frame(Train=trnprf,
+                    Test=tstprf,
+                    Iters=1:length(glmnet_model$lambda),
+                    LambdaVal=glmnet_model$lambda)
+  names(xdf)  <-c('Training',
+                  'Testing',
+                  'Iteration',
+                  'Lambda')
+  tmp <- melt(xdf[,c(1:3)],'Iteration')
+  names(tmp)[2] <- 'Group'
+  # Plotting the performance
+  plt <- ggplot(tmp,aes(x=Iteration,y=value,colour=Group))+geom_line()+
+    theme_bw()+theme(legend.position='bottom')+#scale_y_continuous(limits=c(0,1))+
+    ylab('AUC')+ggtitle('Model Performance \n False Negative Rate across Optimized Hyperparameter')+
+    geom_vline(xintercept=opt(tstprf))
+  nvars <- dim(bs[bs$Betas!=0,])[1]
+  print(plt)
+  print(paste('Optimal performance on test data is',OptimalTestVal,'with',nvars,'variables using',alphaval,'as the alpha value.'))
+  return(list(Plot=plt,
+              Performance=xdf,
+              OptimalTestVal=OptimalTestVal,
+              Betas=bs,
+              BestLambda=best,
+              Preds=yhat,
+              PredClass=num(yhat>=0.5)))
+}
 # This is to get coefficients
-glmnet_betas <- function(glmnet_model){
-  bs <- as.matrix(coef(glmnet_model,s='lambda.min'))
+glmnet_betas <- function(glmnet_model,s=NULL){
+  if(is.null(s)==TRUE){s <-'lambda.min'}
+  bs <- as.matrix(coef(glmnet_model,s=s))
   bs <- data.frame(bs) ; names(bs) <- 'Coefficients'
-  bs <- data.frame(Var=row.names(bs),Coefficients=bs$Coefficients)
-  prcnt0 <- round(len(bs$Coefficients[bs$Coefficients==0])/len(bs$Coefficients),4)
-  out <- paste(prcnt0*100,'% of the variables were zero.',sep='')
-  Nonzero <- len(bs$Coefficients[bs$Coefficients!=0])
-  out2<- paste(Nonzero,'of the variables were non-zero.')
-  print(out)
-  print(out2)
+  bs <- data.frame(VarName=row.names(bs),Coefficients=bs$Coefficients)
+  tot <- len(bs$Coefficients)
+  prcnt_0 <- round(len(bs$Coefficients[bs$Coefficients==0])/len(bs$Coefficients),4)
+  prcnt_non0 <- round(len(bs$Coefficients[bs$Coefficients!=0])/len(bs$Coefficients),4)
+  nzero <- len(bs$Coefficients[bs$Coefficients==0])
+  n_nonzero <- len(bs$Coefficients[bs$Coefficients!=0])
+  print(paste(prcnt_0*100,'% (',nzero,' out of ',tot,') of the variables were zero.',sep=''))
+  print(paste(prcnt_non0*100,'% (',n_nonzero,' out of ',tot,') of the variables were non-zero.',sep=''))
   return(bs)
 }
 # This will just nicely automate stuff that's annoying
@@ -556,6 +655,9 @@ rsq <- function(pred,actual,printrsq=T){
 rmse <- function(pred,actual){
   return(sqrt(mean((pred-actual)^2)))
 }
+myauc <- function(pred,actual){
+  return(auc(response=actual,predictor=pred))
+}
 # Mean Absolute Percent Error
 mape <- function(pred,actual){
   mape <- sum(abs(pred-actual))/sum(actual)
@@ -580,8 +682,8 @@ perf <- function(pred,actual,tfilt,vfilt){
     validperf <- rmse(pred[vfilt],actual[vfilt])
     trainperf <- rmse(pred[tfilt],actual[tfilt])    
   }
-    return(list(TrainingError =trainperf,
-                ValidationError=validperf))    
+  return(list(TrainingError =trainperf,
+              ValidationError=validperf))    
 }
 printperf <- function(pred,actual,tfilt,vfilt){
   out <- perf(pred,actual,tfilt,vfilt)
@@ -594,20 +696,24 @@ printperf <- function(pred,actual,tfilt,vfilt){
   }
 }
 # True Positive Rate
-tpr <- function(pred,actual){
+tpr <- function(pred,actual,thresh=0.5){
+  pred <- as.numeric(pred>=thresh)
   return(sum(pred==1 & actual==1) / sum(actual==1))
 }
 # True Negative Rate
-tnr <- function(pred,actual){
+tnr <- function(pred,actual,thresh=0.5){
+  pred <- as.numeric(pred>=thresh)
   return(sum(pred==0 & actual==0) / sum(actual==0))
 }
 # False Positive Rate
-fpr <- function(pred,actual){
+fpr <- function(pred,actual,thresh=0.5){
+  pred <- as.numeric(pred>=thresh)
   return(sum(pred==1 & actual==0) / sum(actual==0))
 }
 # False Negative Rate
-fnr <- function(pred,actual){
-  return(sum(pred==0 & actual==1) / sum(actual==0))
+fnr <- function(pred,actual,thresh=0.5){
+  pred <- as.numeric(pred>=thresh)
+  return(sum(pred==0 & actual==1) / sum(actual==1))
 }
 coalesce <- function(...) {
   Reduce(function(x, y) {
@@ -673,10 +779,7 @@ predcompare <- function(pred_df,actual){
 }
 # Classification accuracy
 cls_acc <- function(pred,actual){
-  out <- sum(abs(pred - actual)) / length(actual)
-  out <- round((1- out)*100,2)
-  #print(paste("The classification accuracy is ",out,"%.",sep=''))
-  return(out)
+  return(sum(abs(pred - actual)) / length(actual))
 }
 myrocplot <- function(yvar, predprob){
   out <- paste("The AUC is",round(auc(yvar,predprob),4))
@@ -731,7 +834,7 @@ mysplinefunc <- function(x,y,k=10,plt=F,out=F,print_ranks=F,regline=T,main='Spli
   }
 }
 # Owen's Lift
-	ownslift<-function(pred, orderby,actual, w=NULL, n=10) {
+ownslift<-function(pred, orderby,actual, w=NULL, n=10) {
   if (length(w)==0) {
     w<-rep(1.0, length(pred))
   }
@@ -762,7 +865,7 @@ mylift<-function(pred, orderby=NULL, actual, w=NULL, n=10,yscl='dollar',metric=N
     w<-rep(1.0, length(pred))
   }
   if (is.null(orderby)==TRUE){
-  	orderby <- pred
+    orderby <- pred
   }
   pred <- as.numeric(pred)
   v<-data.frame(o=orderby, p=pred, a=actual, w=w)
@@ -932,25 +1035,24 @@ my_gplot <- function(var1,var2=NULL,var_name1='X Variable',var_name2='Y Variable
   # }
 }
 # Bootstrapped Standard Errors in GLMNET
-glmnet_boot <- function(ydep,xs,trainfilter,model,b=1e3,myalpha){
+glmnet_boot <- function(ydep,xs,model,b=1e3,myalpha,fam='binomial'){
   lamb <- model$lambda.min
-  train_xs <- xs[trainfilter==1,]
-  n_obs <- dim(train_xs)[1]
+  n_obs <- dim(xs)[1]
   bs_out<-data.frame(as.matrix(t(coef(model,s='lambda.min'))))
   for(i in 1:dim(bs_out)[2]){bs_out[,i] <- 0 }
   # one thousand bootstrap estimates
   for(i in 1:b){
     indx <- sample(1:n_obs,1e4,replace=TRUE)
-    bs_xs <- train_xs[indx,]
+    bs_xs <- xs[indx,]
     bs_ys <- ydep[indx]
     bs_mod <- glmnet(y=bs_ys,x=bs_xs,
-                     family='poisson',
+                     family=fam,
                      alpha=myalpha,
                      lambda=lamb)
     tmp <- data.frame(as.matrix(t(coef(bs_mod))))
     bs_out <- rbind(bs_out,tmp)
     if((i%%100)==0){
-    	print(paste("Iteration",i,"complete."))
+      print(paste("Iteration",i,"complete."))
     }
   }
   names(bs_out)[1] <- '(Intercept)'
@@ -967,9 +1069,9 @@ glmnet_boot <- function(ydep,xs,trainfilter,model,b=1e3,myalpha){
   return(final)
 }
 glmnet_preds <- function(glmnet_model,xs){
-	preds <- c(predict(glmnet_model,xs,s='lambda.min',type='class'))
-	probs <- c(predict(glmnet_model,xs,s='lambda.min',type='response'))
-	return(data.frame(Class=preds,Probs=probs))
+  preds <- c(predict(glmnet_model,xs,s='lambda.min',type='class'))
+  probs <- c(predict(glmnet_model,xs,s='lambda.min',type='response'))
+  return(data.frame(Class=preds,Probs=probs))
 }
 # Bootstrap AUC
 BootStrapAUC <- function(preds,actual,BS_Reps=100,CI_Lower=0.025,CI_Upper=0.975){
@@ -998,11 +1100,11 @@ BootStrapAUC <- function(preds,actual,BS_Reps=100,CI_Lower=0.025,CI_Upper=0.975)
   par(mfrow=c(1,1))
 }
 PartialDependence <- function(xs,varname,model_name,upper=90,colr='red'){
-	# This is a partial depedence plot for a given feature
-	# this takes in a column, zeros out all of the other columns
-	# then populates the feature with the min value to the 
-	# highest specified percentile value (for max, set upper=100)
-	# then gives the partial prediction.
+  # This is a partial depedence plot for a given feature
+  # this takes in a column, zeros out all of the other columns
+  # then populates the feature with the min value to the 
+  # highest specified percentile value (for max, set upper=100)
+  # then gives the partial prediction.
   n <- 100
   k <- dim(xs)[2]
   mfx <- xs[1:n,]
@@ -1027,10 +1129,10 @@ PartialDependence <- function(xs,varname,model_name,upper=90,colr='red'){
   }
 }
 EmpiricalDependence <- function(xs,varname,model_name,RankNum=10){
-	# This is a partial dependence plot for a given feature
-	# this takes in a column, zeros out all of the other columns,
-	# then sorts by the features value and takes the average 
-	# prediction for that bucket rank -- the default is 10
+  # This is a partial dependence plot for a given feature
+  # this takes in a column, zeros out all of the other columns,
+  # then sorts by the features value and takes the average 
+  # prediction for that bucket rank -- the default is 10
   n <- dim(xs)[1]
   k <- dim(xs)[2]
   mfx <- xs[1:n,]
@@ -1051,7 +1153,7 @@ EmpiricalDependence <- function(xs,varname,model_name,RankNum=10){
       theme_bw()+xlab(varname)+ylab('Partial Prediction')+
       ggtitle(paste('Empirical Partial Prediciton of',varname))
     return(plt)
-    } else {
+  } else {
     return(NULL)
   }
 }
@@ -1079,15 +1181,15 @@ VariableDependence<- function(xs,varname,GBM_Model,NRanks=100){
   if(is.null(p1)==T & is.null(p1)==T){
     out <- NULL
   } else
-  if(is.null(p1)==F & is.null(p2)==F){
-    out <- grid.arrange(p1,p2)        
-  } else
-  if(is.null(p1)==T & is.null(p2)==F){
-    out <- p2
-  } else
-  if(is.null(p1)==F & is.null(p2)==T){
-    out <- p1    
-  }
+    if(is.null(p1)==F & is.null(p2)==F){
+      out <- grid.arrange(p1,p2)        
+    } else
+      if(is.null(p1)==T & is.null(p2)==F){
+        out <- p2
+      } else
+        if(is.null(p1)==F & is.null(p2)==T){
+          out <- p1    
+        }
   return(out)
 }
 MyExperVar <- function(tmpdf,tflt,y,xvar1,xvar2=NULL,alphaval=0.8,fldsval=10){
@@ -1173,12 +1275,12 @@ GBMExpVar <- function(tmpdf,tflt,y,xvar1,xvar2=NULL,prnt=T){
   xs <- model.matrix(~.,data=features)
   set.seed(504)
   TmpModel<- xgboost(data = xs[tflt,],
-                        label = ydep[tflt],
-                        max.depth = 30,
-                        eta = 1,
-                        nround = 200,
-                        objective = "binary:logistic",
-                        verbose=0)
+                     label = ydep[tflt],
+                     max.depth = 30,
+                     eta = 1,
+                     nround = 200,
+                     objective = "binary:logistic",
+                     verbose=0)
   out<- predict(TmpModel,xs)
   if(prnt==T){
     print(auc(ydep[tflt],out[tflt]))    
@@ -1188,7 +1290,7 @@ GBMExpVar <- function(tmpdf,tflt,y,xvar1,xvar2=NULL,prnt=T){
 #========================================================================================================================
 # ROC databuild and use.
 #========================================================================================================================
-cmplot <- function(pred,actual,colrs=c('2','2','4','4'),ymax=1,ttl){
+cmplot <- function(pred,actual,colrs=c('2','2','4','4'),ymax=1,ttl=''){
   # This is a confusion matrix plot
   print(table(pred,actual))
   sdf <- data.frame(table(pred,actual))
@@ -1199,10 +1301,10 @@ cmplot <- function(pred,actual,colrs=c('2','2','4','4'),ymax=1,ttl){
   ttl <- paste("The Classification Accuracy is ", accuracy,'% \n',ttl,sep='')
   sdf$Plabels <- paste(round(sdf$Percent,3)*100,'%',sep='')
   pout <- ggplot(sdf,aes(x=Names,y=Percent,fill=Names))+geom_bar(stat='identity')+
-  theme_bw()+coord_flip()+geom_text(aes(label=Plabels),size=5,hjust = -0.05)+
-  scale_fill_manual(values=colrs)+ylim(c(0,ymax))+ylab('Percent of Data')+
-  theme(legend.position='bottom',legend.title=element_blank(),
-  axis.text=element_text(size=12,face='bold'))+xlab('')+ggtitle(ttl)
+    theme_bw()+coord_flip()+geom_text(aes(label=Plabels),size=5,hjust = -0.05)+
+    scale_fill_manual(values=colrs)+ylim(c(0,ymax))+ylab('Percent of Data')+
+    theme(legend.position='bottom',legend.title=element_blank(),
+          axis.text=element_text(size=12,face='bold'))+xlab('')+ggtitle(ttl)
   print("Ignore any warning signs")
   pout
 }
@@ -1315,10 +1417,12 @@ rocplot.multiple <- function(test.data.list, groupName = "grp", predName = "res"
   return(p)
 }
 # Cross Fold Validation for XGBoost
-xgboost_cv <- function(xs,yvar,tflt,loss='binary:logistic',nfolds=10,nrounds=200,Verbose=0,maxseq=NULL){
+xgboost_cv <- function(xs,ys,train,test,loss='binary:logistic',nfolds=10,nrounds=200,Verbose=0,maxseq=NULL){
   # This is a way to do cross fold validation for the Maximum Depth
-  Xs <- xs[tflt,]
-  yvar <- yvar[tflt]
+  Xs <- xs[train,]
+  yvar <- ys[train]
+  TestXs <- xs[test,]
+  TestYs <- ys[test]
   set.seed(510)
   folds <- cut(seq(1,nrow(Xs)),breaks=nfolds,labels=FALSE)
   flds <- unique(folds)
@@ -1332,6 +1436,7 @@ xgboost_cv <- function(xs,yvar,tflt,loss='binary:logistic',nfolds=10,nrounds=200
   out <- expand.grid(FoldIteration=flds,MaxValueIterated=max_depth_var)
   out$TrainAUC <- NA
   out$TestAUC <- NA
+  out$FinalAUC <- NA
   for(i in 1:length(flds)){
     xtst_tmp <- Xs[folds %in% flds[i],]
     xtrn_tmp <- Xs[!folds %in% flds[i],]
@@ -1349,25 +1454,36 @@ xgboost_cv <- function(xs,yvar,tflt,loss='binary:logistic',nfolds=10,nrounds=200
                      verbose=Verbose)
       trn_pred <- predict(mod,xtrn_tmp); trn_clss <- ifelse(trn_pred>=0.5,1,0)
       tst_pred <- predict(mod,xtst_tmp); tst_clss <- ifelse(tst_pred>=0.5,1,0)
+      ho_pred <- predict(mod,TestXs); ho_clss <- ifelse(ho_pred>=0.5,1,0)
+      # AUC
       out$TestAUC[fold_filter] <- auc(ytst_tmp,tst_pred)
       out$TrainAUC[fold_filter]<- auc(ytrn_tmp,trn_pred)
+      out$FinalAUC[fold_filter] <- auc(TestYs,ho_pred)
+      # FPR
       out$TestFPR[fold_filter] <- fpr(ytst_tmp,tst_clss)
       out$TrainFPR[fold_filter]<- fpr(ytrn_tmp,trn_clss)
+      out$FinalFPR[fold_filter]<- fpr(TestYs,ho_clss)
+      # FNR
       out$TestFNR[fold_filter] <- fnr(ytst_tmp,tst_clss)
       out$TrainFNR[fold_filter]<- fnr(ytrn_tmp,trn_clss)
+      out$FinalFNR[fold_filter]<- fnr(TestYs,ho_clss)
       out$Iteration[fold_filter] <- j
     }
   }
   out <- out[complete.cases(out),]
   smry<-sqldf('select Iteration, MaxValueIterated,
-              avg(TestAUC) as AVG_Test_AUC,
-              stdev(TestAUC) as SD_Test_AUC,
-              avg(TestFNR) as AVG_Test_FNR,
-              avg(TestFPR) as AVG_Test_FPR,
               avg(TrainAUC) as AVG_Train_AUC,
+              avg(TestAUC) as AVG_Test_AUC,
+              avg(FinalAUC) as AVG_Final_AUC,
               stdev(TrainAUC) as SD_Train_AUC,
+              stdev(TestAUC) as SD_Test_AUC,
+              stdev(FinalAUC) as SD_Final_AUC,
               avg(TrainFNR) as AVG_Train_FNR,
+              avg(TestFNR) as AVG_Test_FNR,
+              avg(FinalFNR) as AVG_Final_FNR,
               avg(TrainFPR) as AVG_Train_FPR,
+              avg(TestFPR) as AVG_Test_FPR,
+              avg(FinalFPR) as AVG_Final_FPR,
               count(*) as nrows
               from out group by 1,2')
   with(smry,plot(Iteration,AVG_Test_AUC,ylim=c(0,1),col='red',pch=16,type='b'))
@@ -1376,10 +1492,11 @@ xgboost_cv <- function(xs,yvar,tflt,loss='binary:logistic',nfolds=10,nrounds=200
   grid(5,5,'gray44')
   smry <- smry[order(smry$AVG_Test_AUC,decreasing=F),]
   print(smry)
-  return(smry$MaxValueIterated[dim(smry)[1]])
+  return(list(MaxdepthVal=smry$MaxValueIterated[dim(smry)[1]],
+              PlotData=smry))
 }
 # Useful for modeling
-PredictorImportance<- function(xs,var_list,ydep,model,filename='',newvarnames=NA,ToCSV=F,ttl=NULL){
+PredictorImportance<- function(xs,var_list,ydep,model,filename='',newvarnames=NA,ToCSV=F,ttl=NULL,lambda=NULL){
   # This finds the predictor importance for GLMNET and Other types of models
   Sys.setlocale('LC_ALL','C')  # Takes care of foreign characters
   mfx <- xs
@@ -1395,9 +1512,13 @@ PredictorImportance<- function(xs,var_list,ydep,model,filename='',newvarnames=NA
     labels[i] <- as.character(labeldf$varbuckets[labeldf$TEST==T][1])
   }
   mfx_details <-data.frame(labels,varnames)
-  if((class(model)=='cv.glmnet')==TRUE){
+  if( sum(class(model)=='cv.glmnet')>0 ){
     pred_total <- predict(model,mfx,s='lambda.min',type='response')    
-  } else {
+  } 
+  if(is.null(lambda)==F){  
+    pred_total <- predict(model,mfx,s=lambda,type='response')    
+  } 
+  if( sum(class(model)=='gbm')>0 ){
     pred_total <- predict(model,mfx)    
   }
   actual <- ydep
@@ -1410,9 +1531,13 @@ PredictorImportance<- function(xs,var_list,ydep,model,filename='',newvarnames=NA
     Xs_without <- mfx
     if(length(colfilter)>0){
       Xs_without[,colfilter] <- 0    
-      if((class(model)=='cv.glmnet')==TRUE){
+      if(sum(class(model)=='cv.glmnet')>0){
         pred_without <- predict(model,Xs_without,s='lambda.min',type='response')
-      } else {
+      } 
+      if(is.null(lambda)==F){
+        pred_without <- predict(model,Xs_without,s=lambda)
+      }
+      if(sum(class(model)=='gbm')>0){
         pred_without <- predict(model,Xs_without)
       }
       fitstats <- predcompare(pred_without,actual)  
@@ -1435,6 +1560,9 @@ PredictorImportance<- function(xs,var_list,ydep,model,filename='',newvarnames=NA
     outdf$varbuckets <- newvarnames
   }
   outdf <- outdf[order(outdf$RelativeImportance,decreasing=T),]
+  paste('There are ',dim(outdf)[1],' variables in the model.',sep='')
+  outdf <- outdf[outdf$RelativeImportance>0,]
+  paste(dim(outdf)[1],' were predictive.',sep='')
   outdf$varbuckets <- factor(outdf$varbuckets,
                              levels=outdf$varbuckets[order(outdf$RelativeImportance)])
   if(length(ttl)==0){
@@ -1451,6 +1579,87 @@ PredictorImportance<- function(xs,var_list,ydep,model,filename='',newvarnames=NA
   names(outdf) <-c('Variable','Model Improvement','Relative Importance')
   outlist[[2]] <- outdf
   return(outlist)
+}
+
+gbmOptimize <- function(xs,ys,trnflt,tstflt,depthseq=NULL,treeseq=NULL,mthd='cv',tfrac=0.5,bfrac=0.5,folds=5,seedval=1234){
+  if(is.null(depthseq)==T){ depthseq <- c(1,2,4,6,8,10,12) }
+  if(is.null(treeseq)==T){ treeseq <- c(20,50,100,500,1000,2000) }
+  tmpdf <- cbind2(ys,xs)
+  tmpdf <- data.frame(as.matrix(tmpdf))
+  k <- dim(tmpdf)[2] ; colnames(tmpdf)[1] <- 'ydep'
+  tmpdf2 <- tmpdf[trnflt,]
+  set.seed(seedval)
+  rval <- runif(nrow(tmpdf2))
+  tmpdf2 <- tmpdf2[order(rval),]
+  form <- myformula(colnames(tmpdf2[,2:k]),y='ydep')
+  out <- expand.grid(depthseq,treeseq)
+  names(out) <- c('Depth','NTrees')
+  out$TrainAUC <- NA
+  out$TestAUC <- NA
+  for(i in 1:length(depthseq)){
+    for(j in 1:length(treeseq)){
+      tmpgbm <- gbm(formula=form,
+                    distribution='bernoulli',
+                    data=tmpdf2,
+                    var.monotone=NULL,
+                    n.trees=treeseq[j],
+                    interaction.depth=depthseq[i],
+                    n.minobsinnode=10,
+                    shrinkage=0.001,
+                    bag.fraction=bfrac,
+                    train.fraction=tfrac,
+                    cv.folds=folds,
+                    verbose='CV',
+                    n.cores=32)  
+      tmpiter <- gbm.perf(tmpgbm,method=mthd)
+      tmpyhat <- predict(tmpgbm,tmpdf,tmpiter)
+      tmpperf <- perf(tmpyhat,ys,trnflt,tstflt)
+      tmpflt <- out$Depth==depthseq[i] & out$NTrees==treeseq[j]
+      out$TestAUC[tmpflt] <- tmpperf$ValidationError[1]
+      out$TrainAUC[tmpflt] <- tmpperf$TrainingError[1]
+      print(paste("Iteration",i,j,'complete.'))
+      print(out[tmpflt,])
+    }
+  }
+  t1 <- out[which.max(out$TestAUC),]
+  print(paste('The optimal model has a depth of',t1$Depth,'and',t1$NTrees,'trees.'))
+  return(list(Summary=out,
+              OptimalVal=t1))
+}
+EstimateGBM <- function(xs,ys,trnflt,tstflt,gbmOptimizeVal=NULL,tfrac=0.5,bfrac=0.5,folds=5,mthd='cv',seedval=1234){
+  if(is.null(gbmOptimizeVal)==F){
+    tmp <- gbmOptimizeVal$Summary[which.max(mygbm$Summary$TestAUC),]
+    depthval <- tmp$Depth ; treeval <- tmp$NTrees
+  } else {
+    gbmOptimizeVal <- gbmOptimize(xs,ys,trnflt,tst,flt)
+    tmp <- gbmOptimizeVal$Summary[which.max(mygbm$Summary$TestAUC)]
+    depthval <- tmp$Depth ; treeval <- tmp$NTrees
+  }
+  tmpdf <- cbind2(ys,xs)
+  tmpdf <- data.frame(as.matrix(tmpdf))
+  k <- dim(tmpdf)[2] ; colnames(tmpdf)[1] <- 'ydep'
+  tmpdf2 <- tmpdf[trnflt,]
+  set.seed(seedval)
+  rval <- runif(nrow(tmpdf2))
+  tmpdf2 <- tmpdf2[order(rval),]
+  form <- myformula(colnames(tmpdf2[,2:k]),y='ydep')
+  tmpgbm <- gbm(formula=form,
+                distribution='bernoulli',
+                data=tmpdf2,
+                var.monotone=NULL,
+                n.trees=treeval,
+                interaction.depth=depthval,
+                n.minobsinnode=10,
+                shrinkage=0.001,
+                bag.fraction=bfrac,
+                train.fraction=tfrac,
+                cv.folds=folds,
+                verbose='CV',
+                n.cores=32)
+  tmpiter <- gbm.perf(tmpgbm,method=mthd)
+  tmpyhat <- predict(tmpgbm,tmpdf,tmpiter)
+  return(list(gbmModel=tmpgbm,
+         gbmPred =tmpyhat))
 }
 #========================================================================================================================
 print("Your Functions are now loaded, dawg.")
